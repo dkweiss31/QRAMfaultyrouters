@@ -1,3 +1,5 @@
+from typing import Callable
+
 import numpy as np
 from colorama import init as colorama_init
 from colorama import Fore, Style
@@ -116,85 +118,102 @@ class QRAMRouter:
             )
             return existing_router_list
 
-
-class RouterRepair:
-    def __init__(self, original_tree: QRAMRouter, augmented_tree: QRAMRouter):
-        self.original_tree = original_tree
-        self.augmented_tree = augmented_tree
-        self.faulty_router_list = self.original_tree.router_list_functioning_or_not(functioning=False)
-        self.available_router_list = self.augmented_tree.router_list_functioning_or_not(functioning=True)
-        if len(self.available_router_list) < len(self.faulty_router_list):
-            print("this QRAM must be discarded")
-        # since the whole tree has depth tree_depth if each of the child trees
-        # have depth tree_depth - 1
-        self.n = original_tree.tree_depth() + 1
+    def assign_original_and_augmented(self):
+        num_faulty_right = self.right_child.count_number_faulty_addresses()
+        num_faulty_left = self.left_child.count_number_faulty_addresses()
+        if num_faulty_right <= num_faulty_left:
+            original_tree = self.right_child
+            augmented_tree = self.left_child
+        else:
+            original_tree = self.left_child
+            augmented_tree = self.right_child
+        return original_tree, augmented_tree
 
     def bit_flip(self, ell, address):
         # flip first ell bits of router. Need to do some bin gymnastics
         # -1 is because we are looking at the routers as opposed to the addresses
-        bit_flip_mask = bin((1 << ell) - 1) + (self.n-ell - 1) * "0"
+        n = self.tree_depth()
+        bit_flip_mask = bin((1 << ell) - 1) + (n-ell - 1) * "0"
         flipped_address = int(bit_flip_mask, 2) ^ int(address, 2)
-        flipped_address_bin = format(flipped_address, f"#0{self.n + 2 - 1}b")
+        flipped_address_bin = format(flipped_address, f"#0{n + 2 - 1}b")
         return flipped_address_bin
 
     def router_repair(self):
-        num_faulty = len(self.faulty_router_list)
-        fa_idx_list = list(range(num_faulty))
+        n = self.tree_depth()
+        original_tree, augmented_tree = self.assign_original_and_augmented()
+        faulty_router_list = original_tree.router_list_functioning_or_not(functioning=False)
+        available_router_list = augmented_tree.router_list_functioning_or_not(functioning=True)
+        num_faulty = len(faulty_router_list)
+        fr_idx_list = list(range(num_faulty))
         # will contain mapping of faulty routers to repair routers
         repair_list = np.empty(num_faulty, dtype=object)
         fixed_faulty_list = []
-        # only go up to ell = tree_depth-2, since no savings if we do l=tree_depth-1
-        for ell in range(1, self.n-1):
-            for fr, fr_idx in zip(self.faulty_router_list, fa_idx_list):
-                if fr not in fixed_faulty_list:
-                    # perform bitwise not on the first ell bits of fr
-                    flipped_address = self.bit_flip(ell, fr)
-                    if flipped_address in self.available_router_list:
+        # only go up to ell = n-2, since no savings if we do l=n-1
+        for ell in range(1, n-1):
+            for faulty_router, fr_idx in zip(faulty_router_list, fr_idx_list):
+                if faulty_router not in fixed_faulty_list:
+                    # perform bitwise NOT on the first ell bits of faulty_router
+                    flipped_address = self.bit_flip(ell, faulty_router)
+                    if flipped_address in available_router_list:
                         repair_list[fr_idx] = flipped_address
-                        fixed_faulty_list.append(fr)
+                        fixed_faulty_list.append(faulty_router)
             if len(fixed_faulty_list) == num_faulty:
                 print(f"succeeded in repair with ell={ell}")
                 return repair_list, ell
         print("failed repair, proceed with greedy assignment")
-        return self.available_router_list[0: num_faulty], self.n - 1
+        return available_router_list[0: num_faulty], n - 1
+
+
+class MonteCarloRouterInstances:
+    def __init__(self, n, eps, num_instances, rng_seed, instantiate_trees=True):
+        self.n = n
+        self.eps = eps
+        self.num_instances = num_instances
+        self.rng_seed = rng_seed
+        self.rng = np.random.default_rng(rng_seed)
+        self.rn_list = self.rng.random((num_instances, 2 ** n))
+        self.instantiate_trees = instantiate_trees
+        if instantiate_trees:
+            self.trees = self.create_trees()
+        else:
+            self.trees = None
+
+    def create_trees(self):
+        return list(map(lambda _: QRAMRouter().create_tree(self.n), range(self.num_instances)))
+
+    def _fab_instance_for_one_tree(self, tree_rn_list):
+        tree, rn_list = tree_rn_list
+        _ = tree.fabrication_instance(self.eps, rn_list)
+        return tree
+
+    def fab_instance_for_all_trees(self):
+        if self.trees is None:
+            self.trees = self.create_trees()
+        self.trees = list(map(self._fab_instance_for_one_tree, zip(self.trees, self.rn_list)))
+
+    def map_over_trees(self, func):
+        if self.trees is None:
+            self.trees = self.create_trees()
+        if type(func) is str:
+            return list(map(lambda tree: getattr(tree, func)(), self.trees))
+        elif type(func) is Callable:  # assume its a function that takes a single tree as argument
+            return list(map(lambda tree: func(tree), self.trees))
+        else:
+            raise ValueError("func needs to be a string or a callable")
 
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    n = 5
+    TREE_DEPTH = 7
     EPS = 0.1
+    RNG_SEED = 225652243
+    MC_INSTANCE = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, RNG_SEED)
+    MC_INSTANCE.fab_instance_for_all_trees()
+    NUM_FAULTY = np.array(MC_INSTANCE.map_over_trees("count_number_faulty_addresses"))
+    AVG_FAULTY = np.average(NUM_FAULTY)
+    FRAC_REPAIRABLE = len(NUM_FAULTY[NUM_FAULTY <= 2 ** (TREE_DEPTH - 1)]) / NUM_INSTANCES
+    analytic_faulty = 2 ** TREE_DEPTH - 2 ** TREE_DEPTH * (1 - EPS) ** TREE_DEPTH
+    print(0)
+
     rng = np.random.default_rng(22563452243)  # 27585353
-    RN_LIST = rng.random((NUM_INSTANCES, 2 ** n))
-
-    # def faulty_tree(eps, tree_depth, rns):
-    #     mytree = QRAMRouter()
-    #     fulltree = mytree.create_tree(tree_depth)
-    #     fulltree.fabrication_instance(eps, RN_LIST=rns)
-    #     return fulltree
-    #
-    # alltrees = map(lambda rs: faulty_tree(eps, tree_depth, rs), RN_LIST)
-    # alltrees_num_faulty = list(map(lambda tree: tree.count_number_faulty_addresses(), alltrees))
-    # avgfaulty = np.average(alltrees_num_faulty)
-    # analytic_faulty = 2**tree_depth - 2**tree_depth * (1-eps)**tree_depth
-    # print(avgfaulty, analytic_faulty)
-
-    MYTREE = QRAMRouter()
-    FULLTREE = MYTREE.create_tree(n)
-    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[0])
-    FULLTREE.print_tree()
-    NUMFAULTY = FULLTREE.count_number_faulty_addresses()
-    FAULTY_ROUTER_LIST = FULLTREE.router_list_functioning_or_not(functioning=False)
-    FUNCTIONING_ROUTER_LIST = FULLTREE.router_list_functioning_or_not(functioning=True)
-    NUM_FAULTY_RIGHT = FULLTREE.right_child.count_number_faulty_addresses()
-    NUM_FAULTY_LEFT = FULLTREE.left_child.count_number_faulty_addresses()
-    if NUM_FAULTY_RIGHT <= NUM_FAULTY_LEFT:
-        ORIG_TREE = FULLTREE.right_child
-        AUG_TREE = FULLTREE.left_child
-    else:
-        ORIG_TREE = FULLTREE.left_child
-        AUG_TREE = FULLTREE.right_child
-
-    ADD_REPAIR = RouterRepair(ORIG_TREE, AUG_TREE)
-    REPAIR_LIST = ADD_REPAIR.router_repair()
-    print(NUMFAULTY, "faulty: ", FAULTY_ROUTER_LIST)
-    print("repair ", REPAIR_LIST)
+    RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))

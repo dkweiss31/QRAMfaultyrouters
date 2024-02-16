@@ -4,6 +4,8 @@ import numpy as np
 from colorama import init as colorama_init
 from colorama import Fore, Style
 
+from quantum_utils import write_to_h5
+
 colorama_init()
 
 
@@ -71,9 +73,10 @@ class QRAMRouter:
         the remainder of the list for use for deciding if other routers are faulty"""
         if rn_list is None:
             rnd = np.random.random()
+            new_rn_list = None
         else:
             rnd = rn_list[0]
-        new_rn_list = rn_list[1:]
+            new_rn_list = rn_list[1:]
         if rnd < failure_rate:
             self.deactivate_self_and_below_routers()
             return new_rn_list
@@ -140,10 +143,19 @@ class QRAMRouter:
 
     def router_repair(self):
         n = self.tree_depth()
+        # each has depth n-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
         faulty_router_list = original_tree.router_list_functioning_or_not(functioning=False)
         available_router_list = augmented_tree.router_list_functioning_or_not(functioning=True)
         num_faulty = len(faulty_router_list)
+        if num_faulty == 0:
+            # no repair necessary
+            return [], 0
+        # original faulty routers + augmented faulty routers
+        total_faulty = num_faulty + 2**(n-1) - len(available_router_list)
+        if total_faulty > 2**(n - 1):
+            # QRAM unrepairable
+            return [], np.inf
         fr_idx_list = list(range(num_faulty))
         # will contain mapping of faulty routers to repair routers
         repair_list = np.empty(num_faulty, dtype=object)
@@ -158,18 +170,20 @@ class QRAMRouter:
                         repair_list[fr_idx] = flipped_address
                         fixed_faulty_list.append(faulty_router)
             if len(fixed_faulty_list) == num_faulty:
-                print(f"succeeded in repair with ell={ell}")
+                # succeeded in repair with ell bit flips
                 return repair_list, ell
-        print("failed repair, proceed with greedy assignment")
+        # failed repair, proceed with greedy assignment requiring n-1 bit flips
         return available_router_list[0: num_faulty], n - 1
 
 
 class MonteCarloRouterInstances:
-    def __init__(self, n, eps, num_instances, rng_seed, instantiate_trees=True):
+    def __init__(self, n, eps, num_instances, rng_seed, filepath="tmp.h5py", instantiate_trees=True):
         self.n = n
         self.eps = eps
         self.num_instances = num_instances
         self.rng_seed = rng_seed
+        self.filepath = filepath
+        self._init_attrs = set(self.__dict__.keys())
         self.rng = np.random.default_rng(rng_seed)
         self.rn_list = self.rng.random((num_instances, 2 ** n))
         self.instantiate_trees = instantiate_trees
@@ -177,6 +191,23 @@ class MonteCarloRouterInstances:
             self.trees = self.create_trees()
         else:
             self.trees = None
+
+    def param_dict(self):
+        return {k: v for k, v in self.__dict__.items() if k in self._init_attrs}
+
+    def run(self):
+        print("running faulty QRAM simulation")
+        self.fab_instance_for_all_trees()
+        max_num_bit_flips, avg_bit_flips = self.bit_flips_required_for_repair()
+        avg_num_faulty, frac_repairable = self.avg_num_faulty_and_repairable()
+        data_dict = {
+            "max_num_bit_flips": max_num_bit_flips,
+            "avg_bit_flips": avg_bit_flips,
+            "avg_num_faulty": avg_num_faulty,
+            "frac_repairable": frac_repairable,
+        }
+        print(f"writing results to {self.filepath}")
+        write_to_h5(self.filepath, data_dict, self.param_dict())
 
     def create_trees(self):
         return list(map(lambda _: QRAMRouter().create_tree(self.n), range(self.num_instances)))
@@ -201,19 +232,18 @@ class MonteCarloRouterInstances:
         else:
             raise ValueError("func needs to be a string or a callable")
 
+    def bit_flips_required_for_repair(self):
+        repaired_routers = self.map_over_trees("router_repair")
+        routers, num_bit_flips = list(zip(*repaired_routers))
+        num_bit_flips = np.array(num_bit_flips)
+        # exclude inf if present, indicating unrepairable
+        num_bit_flips = num_bit_flips[num_bit_flips < np.inf]
+        max_num_bit_flips = np.max(num_bit_flips)
+        avg_bit_flips = np.average(num_bit_flips)
+        return max_num_bit_flips, avg_bit_flips
 
-if __name__ == "__main__":
-    NUM_INSTANCES = 10000
-    TREE_DEPTH = 7
-    EPS = 0.1
-    RNG_SEED = 225652243
-    MC_INSTANCE = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, RNG_SEED)
-    MC_INSTANCE.fab_instance_for_all_trees()
-    NUM_FAULTY = np.array(MC_INSTANCE.map_over_trees("count_number_faulty_addresses"))
-    AVG_FAULTY = np.average(NUM_FAULTY)
-    FRAC_REPAIRABLE = len(NUM_FAULTY[NUM_FAULTY <= 2 ** (TREE_DEPTH - 1)]) / NUM_INSTANCES
-    analytic_faulty = 2 ** TREE_DEPTH - 2 ** TREE_DEPTH * (1 - EPS) ** TREE_DEPTH
-    print(0)
-
-    rng = np.random.default_rng(22563452243)  # 27585353
-    RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
+    def avg_num_faulty_and_repairable(self):
+        num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
+        avg_num_faulty = np.average(num_faulty)
+        frac_repairable = len(num_faulty[num_faulty <= 2 ** (self.n - 1)]) / self.num_instances
+        return avg_num_faulty, frac_repairable

@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --partition=scavenge
+#SBATCH --requeue
 #SBATCH --job-name=qramfaulty
 #SBATCH -o out/output-%a.txt -e out/errors-%a.txt
 #SBATCH --array=0-1999

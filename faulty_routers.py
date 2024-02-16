@@ -208,6 +208,7 @@ class MonteCarloRouterInstances:
         }
         print(f"writing results to {self.filepath}")
         write_to_h5(self.filepath, data_dict, self.param_dict())
+        return 0
 
     def create_trees(self):
         return list(map(lambda _: QRAMRouter().create_tree(self.n), range(self.num_instances)))

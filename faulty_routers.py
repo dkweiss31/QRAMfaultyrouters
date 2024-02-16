@@ -198,13 +198,13 @@ class MonteCarloRouterInstances:
     def run(self):
         print("running faulty QRAM simulation")
         self.fab_instance_for_all_trees()
-        max_num_bit_flips, avg_bit_flips = self.bit_flips_required_for_repair()
-        avg_num_faulty, frac_repairable = self.avg_num_faulty_and_repairable()
+        repaired_routers = self.map_over_trees("router_repair")
+        routers, num_bit_flips = list(zip(*repaired_routers))
+        num_bit_flips = np.array(num_bit_flips)
+        num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
         data_dict = {
-            "max_num_bit_flips": max_num_bit_flips,
-            "avg_bit_flips": avg_bit_flips,
-            "avg_num_faulty": avg_num_faulty,
-            "frac_repairable": frac_repairable,
+            "num_bit_flips": num_bit_flips,
+            "num_faulty": num_faulty,
         }
         print(f"writing results to {self.filepath}")
         write_to_h5(self.filepath, data_dict, self.param_dict())
@@ -231,19 +231,3 @@ class MonteCarloRouterInstances:
             return list(map(lambda tree: func(tree), self.trees))
         else:
             raise ValueError("func needs to be a string or a callable")
-
-    def bit_flips_required_for_repair(self):
-        repaired_routers = self.map_over_trees("router_repair")
-        routers, num_bit_flips = list(zip(*repaired_routers))
-        num_bit_flips = np.array(num_bit_flips)
-        # exclude inf if present, indicating unrepairable
-        num_bit_flips = num_bit_flips[num_bit_flips < np.inf]
-        max_num_bit_flips = np.max(num_bit_flips)
-        avg_bit_flips = np.average(num_bit_flips)
-        return max_num_bit_flips, avg_bit_flips
-
-    def avg_num_faulty_and_repairable(self):
-        num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
-        avg_num_faulty = np.average(num_faulty)
-        frac_repairable = len(num_faulty[num_faulty <= 2 ** (self.n - 1)]) / self.num_instances
-        return avg_num_faulty, frac_repairable

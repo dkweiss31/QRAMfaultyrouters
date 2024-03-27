@@ -25,14 +25,12 @@ class QRAMRouter:
         left_child=None,
         right_child=None,
         functioning=True,
-        largest_functioning_subtree_depth=0,
         part_of_subtree=False,
     ):
         self.location = location
         self.left_child = left_child
         self.right_child = right_child
         self.functioning = functioning
-        self.largest_functioning_subtree_depth_as_root = largest_functioning_subtree_depth
         self.part_of_subtree = part_of_subtree
 
     def create_tree(self, tree_depth, current_location="0b"):
@@ -102,7 +100,10 @@ class QRAMRouter:
 
     def simple_reallocation(self, m, k):
         """m is the depth of the QRAM we are after, and k is the level of the QRAM this
-        router should be acting as"""
+        router should be acting as
+        returns the routers at the bottom of the tree that are part of the m-bit
+        QRAM as well as a flag: 1 if it succeeded, 0 if it failed to find an m-bit QRAM
+        """
         def _simple_reallocation(m_depth, k_depth, router, existing_subtree=None):
             if existing_subtree is None:
                 existing_subtree = []
@@ -140,47 +141,9 @@ class QRAMRouter:
                 raise SimpleReallocationFailure
         try:
             subtree = _simple_reallocation(m, k, self)
-            return subtree
+            return subtree, 1
         except SimpleReallocationFailure:
-            return None
-
-    def all_functioning_to_depth(self, depth):
-        if depth == 0:  # indicates we were only asking about above routers, doesn't include self
-            return True
-        elif not self.functioning:
-            return False
-        elif self.right_child is None:
-            if depth == 1:
-                return True
-            else:
-                return False
-        else:
-            return (self.right_child.all_functioning_to_depth(depth - 1)
-                    and self.left_child.all_functioning_to_depth(depth - 1))
-
-    def calculate_my_largest_functioning_subtree(self):
-        if not self.functioning:
-            self.largest_functioning_subtree_depth_as_root = 0
-        else:
-            n = self.tree_depth()
-            for depth in range(1, n + 1):  # go until not all functioning to a certain depth
-                depth_functioning_subtree = self.all_functioning_to_depth(depth)
-                if depth_functioning_subtree:
-                    self.largest_functioning_subtree_depth_as_root = depth
-                else:
-                    break
-            if n != 1:
-                self.right_child.calculate_my_largest_functioning_subtree()
-                self.left_child.calculate_my_largest_functioning_subtree()
-
-    def largest_functioning_subtree(self):
-        if self.right_child is None:
-            return self.largest_functioning_subtree_depth_as_root
-        else:
-            return max(self.largest_functioning_subtree_depth_as_root,
-                       self.right_child.largest_functioning_subtree(),
-                       self.left_child.largest_functioning_subtree(),
-                       )
+            return [], 0
 
     def count_number_faulty_addresses(self):
         if self.right_child is None:
@@ -231,15 +194,15 @@ class QRAMRouter:
     def bit_flip(self, ell, address):
         # flip first ell bits of router. Need to do some bin gymnastics
         # -1 is because we are looking at the routers as opposed to the addresses
-        n = self.tree_depth()
-        bit_flip_mask = bin((1 << ell) - 1) + (n-ell - 1) * "0"
+        t_depth = self.tree_depth()
+        bit_flip_mask = bin((1 << ell) - 1) + (t_depth-ell - 1) * "0"
         flipped_address = int(bit_flip_mask, 2) ^ int(address, 2)
-        flipped_address_bin = format(flipped_address, f"#0{n + 2 - 1}b")
+        flipped_address_bin = format(flipped_address, f"#0{t_depth + 2 - 1}b")
         return flipped_address_bin
 
     def router_repair(self):
-        n = self.tree_depth()
-        # each has depth n-1
+        t_depth = self.tree_depth()
+        # each has depth t_depth-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
         faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
         available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
@@ -248,16 +211,16 @@ class QRAMRouter:
             # no repair necessary
             return [], 0
         # original faulty routers + augmented faulty routers
-        total_faulty = num_faulty + 2**(n-1) - len(available_router_list)
-        if total_faulty > 2**(n - 1):
+        total_faulty = num_faulty + 2**(t_depth-1) - len(available_router_list)
+        if total_faulty > 2**(t_depth - 1):
             # QRAM unrepairable
             return [], np.inf
         fr_idx_list = list(range(num_faulty))
         # will contain mapping of faulty routers to repair routers
         repair_list = np.empty(num_faulty, dtype=object)
         fixed_faulty_list = []
-        # only go up to ell = n-2, since no savings if we do l=n-1
-        for ell in range(1, n-1):
+        # only go up to ell = t_depth-2, since no savings if we do l=t_depth-1
+        for ell in range(1, t_depth-1):
             for faulty_router, fr_idx in zip(faulty_router_list, fr_idx_list):
                 if faulty_router not in fixed_faulty_list:
                     # perform bitwise NOT on the first ell bits of faulty_router
@@ -268,8 +231,8 @@ class QRAMRouter:
             if len(fixed_faulty_list) == num_faulty:
                 # succeeded in repair with ell bit flips
                 return repair_list, ell
-        # failed repair, proceed with greedy assignment requiring n-1 bit flips
-        return available_router_list[0: num_faulty], n - 1
+        # failed repair, proceed with greedy assignment requiring t_depth-1 bit flips
+        return available_router_list[0: num_faulty], t_depth - 1
 
 
 class MonteCarloRouterInstances:
@@ -319,13 +282,13 @@ class MonteCarloRouterInstances:
             self.trees = self.create_trees()
         self.trees = list(map(self._fab_instance_for_one_tree, zip(self.trees, self.rn_list)))
 
-    def map_over_trees(self, func):
+    def map_over_trees(self, func, *args):
         if self.trees is None:
             self.trees = self.create_trees()
         if type(func) is str:
-            return list(map(lambda tree: getattr(tree, func)(), self.trees))
+            return list(map(lambda tree: getattr(tree, func)(*args), self.trees))
         elif type(func) is Callable:  # assume its a function that takes a single tree as argument
-            return list(map(lambda tree: func(tree), self.trees))
+            return list(map(lambda tree: func(tree, *args), self.trees))
         else:
             raise ValueError("func needs to be a string or a callable")
 
@@ -366,23 +329,21 @@ class SimpleReallocationFailure(Exception):
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    n = 5
+    TREE_DEPTH = 5
     EPS = 0.1
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
-    rng = np.random.default_rng(22543268585425543)  # 27585353
-    RN_LIST = rng.random((NUM_INSTANCES, 2 ** n))
+    rng = np.random.default_rng(2543567243234588543)  # 27585353
+    RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
     MYTREE = QRAMRouter()
-    FULLTREE = MYTREE.create_tree(n)
+    FULLTREE = MYTREE.create_tree(TREE_DEPTH)
     FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[0])
-    FULLTREE.calculate_my_largest_functioning_subtree()
     FULLTREE.print_tree()
-    #FULLTREE.print_tree(print_attr="largest_functioning_subtree_depth_as_root")
+    print("-------------------------------")
     avail_router = FULLTREE.lowest_router_list_functioning_or_not(functioning=True)
     desired_depth_subQ = 4
     if len(avail_router) >= 2**(desired_depth_subQ - 1):
-        subtree = FULLTREE.simple_reallocation(4, 0)
+        SUBTREE = FULLTREE.simple_reallocation(4, 0)
         FULLTREE.print_tree()
-        print(subtree)
-    #print(FULLTREE.largest_functioning_subtree())
+        print(SUBTREE)

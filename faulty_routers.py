@@ -70,13 +70,11 @@ class QRAMRouter:
         if self.left_child:
             self.left_child.print_tree(indent + "     ", am_I_a_right_or_left_child="left", print_attr=print_attr)
 
-    def deactivate_self_and_below_routers(self):
-        """called if a parent router is not functioning. All below routers
-        are then nonfunctioning"""
-        self.functioning = False
+    def set_attr_self_and_below(self, attr, val):
+        setattr(self, attr, val)
         if self.right_child:
-            self.right_child.deactivate_self_and_below_routers()
-            self.left_child.deactivate_self_and_below_routers()
+            self.right_child.set_attr_self_and_below(attr, val)
+            self.left_child.set_attr_self_and_below(attr, val)
 
     def fabrication_instance(self, failure_rate=0.3, rn_list=None):
         """this function utilizes a list of random numbers (if passed) to decide
@@ -89,7 +87,7 @@ class QRAMRouter:
             rnd = rn_list[0]
             new_rn_list = rn_list[1:]
         if rnd < failure_rate:
-            self.deactivate_self_and_below_routers()
+            self.set_attr_self_and_below("functioning", False)
             return new_rn_list
         else:
             self.functioning = True
@@ -118,27 +116,32 @@ class QRAMRouter:
             num_left = len(left_avail_router_list)
             # can succesfully split this router as enough addresses available on each side
             if num_right >= 2**(m_depth-k_depth-2) and num_left >= 2**(m_depth-k_depth-2):
-                router.part_of_subtree = True
-                existing_subtree = _simple_reallocation(
-                    m_depth, k_depth + 1, router.right_child, existing_subtree=existing_subtree
-                )
-                existing_subtree = _simple_reallocation(
-                    m_depth, k_depth + 1, router.left_child, existing_subtree=existing_subtree
-                )
-                return existing_subtree
+                # try splitting this router. If we fail later on, we return here and enter the if
+                # statements below
+                try:
+                    router.part_of_subtree = True
+                    existing_subtree = _simple_reallocation(
+                        m_depth, k_depth + 1, router.right_child, existing_subtree=existing_subtree
+                    )
+                    existing_subtree = _simple_reallocation(
+                        m_depth, k_depth + 1, router.left_child, existing_subtree=existing_subtree
+                    )
+                    return existing_subtree
+                except SimpleReallocationFailure:
+                    router.set_attr_self_and_below("part_of_subtree", False)
+                    pass
             # check if right or left child router can serve as a level k router
-            elif num_right >= 2**(m_depth - k_depth - 1):
+            if num_right >= 2**(m_depth - k_depth - 1):
                 existing_subtree = _simple_reallocation(
                     m_depth, k_depth, router.right_child, existing_subtree=existing_subtree
                 )
                 return existing_subtree
-            elif num_left >= 2**(m_depth - k_depth - 1):
+            if num_left >= 2**(m_depth - k_depth - 1):
                 existing_subtree = _simple_reallocation(
                     m_depth, k_depth, router.left_child, existing_subtree=existing_subtree
                 )
                 return existing_subtree
-            else:
-                raise SimpleReallocationFailure
+            raise SimpleReallocationFailure
         try:
             subtree = _simple_reallocation(m, k, self)
             return subtree, 1
@@ -261,9 +264,15 @@ class MonteCarloRouterInstances:
         routers, num_bit_flips = list(zip(*repaired_routers))
         num_bit_flips = np.array(num_bit_flips)
         num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
+        simple_repair_n1 = self.map_over_trees("simple_reallocation", self.n - 1, 0)
+        simple_repair_n2 = self.map_over_trees("simple_reallocation", self.n - 2, 0)
+        (_, n1_success) = list(zip(*simple_repair_n1))
+        (_, n2_success) = list(zip(*simple_repair_n2))
         data_dict = {
             "num_bit_flips": num_bit_flips,
             "num_faulty": num_faulty,
+            "n1_success": n1_success,
+            "n2_success": n2_success,
         }
         print(f"writing results to {self.filepath}")
         write_to_h5(self.filepath, data_dict, self.param_dict())
@@ -329,21 +338,30 @@ class SimpleReallocationFailure(Exception):
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    TREE_DEPTH = 5
-    EPS = 0.1
+    TREE_DEPTH = 6
+    EPS = 0.2
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
-    rng = np.random.default_rng(2543567243234588543)  # 27585353
+    RNG_SEED = 2543567243234588543
+    rng = np.random.default_rng(RNG_SEED)  # 27585353
     RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)
-    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[0])
+    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[934])
     FULLTREE.print_tree()
     print("-------------------------------")
     avail_router = FULLTREE.lowest_router_list_functioning_or_not(functioning=True)
-    desired_depth_subQ = 4
+    desired_depth_subQ = TREE_DEPTH - 2
     if len(avail_router) >= 2**(desired_depth_subQ - 1):
-        SUBTREE = FULLTREE.simple_reallocation(4, 0)
+        SUBTREE = FULLTREE.simple_reallocation(desired_depth_subQ, 0)
         FULLTREE.print_tree()
         print(SUBTREE)
+
+    mcinstance = MonteCarloRouterInstances(
+        TREE_DEPTH,
+        EPS,
+        NUM_INSTANCES,
+        RNG_SEED,
+    )
+    mcinstance.run()

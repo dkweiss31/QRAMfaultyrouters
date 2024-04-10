@@ -102,6 +102,10 @@ class QRAMRouter:
         returns the routers at the bottom of the tree that are part of the m-bit
         QRAM as well as a flag: 1 if it succeeded, 0 if it failed to find an m-bit QRAM
         """
+        num_avail = self.lowest_router_list_functioning_or_not(functioning=True)
+        if len(num_avail) < 2**(m-2):
+            return [], 0
+
         def _simple_reallocation(m_depth, k_depth, router, existing_subtree=None):
             if existing_subtree is None:
                 existing_subtree = []
@@ -132,11 +136,13 @@ class QRAMRouter:
                     pass
             # check if right or left child router can serve as a level k router
             if num_right >= 2**(m_depth - k_depth - 1):
+                router.part_of_subtree = True
                 existing_subtree = _simple_reallocation(
                     m_depth, k_depth, router.right_child, existing_subtree=existing_subtree
                 )
                 return existing_subtree
             if num_left >= 2**(m_depth - k_depth - 1):
+                router.part_of_subtree = True
                 existing_subtree = _simple_reallocation(
                     m_depth, k_depth, router.left_child, existing_subtree=existing_subtree
                 )
@@ -162,6 +168,7 @@ class QRAMRouter:
                         + self.left_child.count_number_faulty_addresses())
 
     def lowest_router_list_functioning_or_not(self, functioning=False, existing_router_list=None):
+        # TODO doesn't have to be at the bottom! Fix me!!
         """function that can compute a list of faulty routers and also functioning routers
         among those at the bottom of the tree. If functioning is set to False,
         this creates a list of all non-functioning routers. If functioning is set to
@@ -203,7 +210,15 @@ class QRAMRouter:
         flipped_address_bin = format(flipped_address, f"#0{t_depth + 2 - 1}b")
         return flipped_address_bin
 
-    def router_repair(self):
+    @staticmethod
+    @np.vectorize
+    def num_bit_flips(faulty_address, repair_address):
+        """returns the number of bit flips required to map faulty to repair"""
+        diff_address = int(faulty_address, 2) ^ int(repair_address, 2)
+        return sum(map(int, format(diff_address, "b")))
+
+    def router_repair(self, method="auction"):
+        """method can be 'auction' or 'straight'"""
         t_depth = self.tree_depth()
         # each has depth t_depth-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
@@ -218,13 +233,87 @@ class QRAMRouter:
         if total_faulty > 2**(t_depth - 1):
             # QRAM unrepairable
             return [], np.inf
-        fr_idx_list = list(range(num_faulty))
+        if method == "auction":
+            return self.router_repair_auction(faulty_router_list, available_router_list)
+        elif method == "straight":
+            return self.router_repair_straight(faulty_router_list, available_router_list)
+        else:
+            raise RuntimeError("method not supported")
+
+    def router_repair_auction(self, faulty_router_list, available_router_list, eps=None):
+        num_faulty = len(faulty_router_list)
+        # see Bertsekas https://link.springer.com/article/10.1007/BF00247653 this eps
+        # is introduced to avoid the situation where there are only a few available routers
+        # that everyone is competing for, but each available router is just as good as the next.
+        # In this case no one raises their prices and we end up in a never-ending loop
+        if eps is None:
+            eps = 1. / num_faulty
+        frl, arl = np.meshgrid(faulty_router_list, available_router_list, indexing="ij")
+        # cost is defined as the number of required bit flips
+        num_bit_flips_mat = self.num_bit_flips(frl, arl)
+        # the algorithm is usually described in terms of maximizing benefit,
+        # so we take the negative of the cost
+        benefit_matrix = - num_bit_flips_mat
+        # initialize with zero prices, which Bertsekas notes is the best way to
+        # attack the asymmetric problem (where the number of faulty routers and
+        # available routers is not the same)
+        prices = np.zeros(len(available_router_list))
+        max_num_bit_flips = 0
+        unassigned = [router for router in faulty_router_list]
+        assigned = {}
+
+        while True:
+            # bid
+            benefit_less_price = benefit_matrix - prices[..., :]
+            best_avail_router_idxs = np.argmax(benefit_less_price, axis=1)
+            best_benefit_values = benefit_less_price[np.arange(num_faulty), best_avail_router_idxs]
+            # extract second best item to calculate bid
+            benefit_less_price[np.arange(num_faulty), best_avail_router_idxs] = -np.inf
+            second_best_values = np.max(benefit_less_price, axis=1)
+            bid_increments = best_benefit_values - second_best_values
+            # assign
+            # below only want to loop over those addresses who are unassigned. We
+            # use inf as a placeholder and filter it out later
+            mask = np.isin(faulty_router_list, unassigned).astype(int)
+            best_avail_for_unassigned = [
+                best_avail if unassigned else np.inf
+                for unassigned, best_avail in zip(mask, best_avail_router_idxs)
+            ]
+            unique_avail_best_idxs = set(best_avail_for_unassigned)
+            if np.inf in unique_avail_best_idxs:
+                unique_avail_best_idxs.remove(np.inf)
+            for best_idx in unique_avail_best_idxs:
+                # indices of all routers that want to be assigned to best_idx
+                faulty_routers_wanting = np.squeeze(
+                    np.argwhere(best_avail_for_unassigned == best_idx), axis=1
+                )
+                _highest_bidder_idx = np.argmax(bid_increments[faulty_routers_wanting])
+                highest_bidder_idx = faulty_routers_wanting[_highest_bidder_idx]
+                faulty_router = faulty_router_list[highest_bidder_idx]
+                highest_bid = bid_increments[highest_bidder_idx]
+                prices[best_idx] += highest_bid + eps
+                if available_router_list[best_idx] in assigned:
+                    unassigned.append(assigned[available_router_list[best_idx]])
+                assigned[available_router_list[best_idx]] = faulty_router
+                unassigned.remove(faulty_router)
+                num_bit_flips = num_bit_flips_mat[highest_bidder_idx, best_idx]
+                if num_bit_flips > max_num_bit_flips:
+                    max_num_bit_flips = num_bit_flips
+            if len(unassigned) == 0:
+                break
+        repair_dict = {val: key for key, val in assigned.items()}
+        repair_list = [repair_dict[faulty_router] for faulty_router in faulty_router_list]
+        return repair_list, max_num_bit_flips
+
+    def router_repair_straight(self, faulty_router_list, available_router_list):
+        t_depth = self.tree_depth()
+        num_faulty = len(faulty_router_list)
         # will contain mapping of faulty routers to repair routers
         repair_list = np.empty(num_faulty, dtype=object)
         fixed_faulty_list = []
         # only go up to ell = t_depth-2, since no savings if we do l=t_depth-1
         for ell in range(1, t_depth-1):
-            for faulty_router, fr_idx in zip(faulty_router_list, fr_idx_list):
+            for fr_idx, faulty_router in enumerate(faulty_router_list):
                 if faulty_router not in fixed_faulty_list:
                     # perform bitwise NOT on the first ell bits of faulty_router
                     flipped_address = self.bit_flip(ell, faulty_router)

@@ -292,9 +292,9 @@ class QRAMRouter:
             single_repair_dict, _ = self.router_repair_auction(all_faulty_router_list, all_available_router_list)
             repair_dict = single_repair_dict | router_repair_dict
             num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-            return repair_dict, num_flag_qubits
+            return repair_dict, len(num_flag_qubits)
         num_flag_qubits = self.compute_number_of_flag_qubits(router_repair_dict)
-        return router_repair_dict, num_flag_qubits
+        return router_repair_dict, len(num_flag_qubits)
 
     def bit_flip(self, ell, address):
         # flip first ell bits of router. Need to do some bin gymnastics
@@ -400,7 +400,7 @@ class QRAMRouter:
                 break
         repair_dict = {val: key for key, val in assigned.items()}
         num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-        return repair_dict, num_flag_qubits
+        return repair_dict, len(num_flag_qubits)
 
     def router_repair_bit_flip(self, faulty_router_list, available_router_list):
         t_depth = self.tree_depth()
@@ -421,12 +421,12 @@ class QRAMRouter:
             if len(unassigned_faulty_routers) == 0:
                 # succeeded in repair with ell bit flips
                 num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-                return repair_dict, num_flag_qubits
+                return repair_dict, len(num_flag_qubits)
         # proceed with greedy assignment for remaining addresses
         greedy_repairs = dict(zip(unassigned_faulty_routers, unassigned_available_routers))
         repair_dict = repair_dict | greedy_repairs
         num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-        return repair_dict, num_flag_qubits
+        return repair_dict, len(num_flag_qubits)
 
 
 class MonteCarloRouterInstances:
@@ -451,16 +451,24 @@ class MonteCarloRouterInstances:
     def run(self):
         print("running faulty QRAM simulation")
         self.fab_instance_for_all_trees()
-        repaired_routers = self.map_over_trees("router_repair")
-        routers, num_bit_flips = list(zip(*repaired_routers))
-        num_bit_flips = np.array(num_bit_flips)
+        repaired_routers_bit_flip = self.map_over_trees("router_repair", "bit_flip")
+        repaired_routers_auction = self.map_over_trees("router_repair", "auction")
+        repaired_routers_together = self.map_over_trees("router_repair", "together")
+        _, num_flags_bit_flip = list(zip(*repaired_routers_bit_flip))
+        _, num_flags_auction = list(zip(*repaired_routers_auction))
+        _, num_flags_together = list(zip(*repaired_routers_together))
+        num_flags_bit_flip = np.array(num_flags_bit_flip, dtype=float)
+        num_flags_auction = np.array(num_flags_auction, dtype=float)
+        num_flags_together = np.array(num_flags_together, dtype=float)
         num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
         simple_repair_n1 = self.map_over_trees("simple_reallocation", self.n - 1, 0)
         simple_repair_n2 = self.map_over_trees("simple_reallocation", self.n - 2, 0)
         (_, n1_success) = list(zip(*simple_repair_n1))
         (_, n2_success) = list(zip(*simple_repair_n2))
         data_dict = {
-            "num_bit_flips": num_bit_flips,
+            "num_flags_bit_flip": num_flags_bit_flip,
+            "num_flags_auction": num_flags_auction,
+            "num_flags_together": num_flags_together,
             "num_faulty": num_faulty,
             "n1_success": n1_success,
             "n2_success": n2_success,

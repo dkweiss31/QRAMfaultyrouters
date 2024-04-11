@@ -202,6 +202,15 @@ class QRAMRouter:
             augmented_tree = self.right_child
         return original_tree, augmented_tree
 
+    @staticmethod
+    def compute_number_of_flag_qubits(repair_dict):
+        """assumption is that the keys of repair_dict are faulty routers and
+        the values are repair routers they have been assigned to"""
+        diff_addresses = [format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
+                          for (faulty_address, repair_address) in repair_dict.items()]
+        unique_addresses = set(diff_addresses)
+        return unique_addresses
+
     def collect_routers_functioning_together(self, routers_available_for_assignment=None):
         if routers_available_for_assignment is None:
             routers_available_for_assignment = []
@@ -253,8 +262,8 @@ class QRAMRouter:
         available_sizes = np.zeros(len(routers_available_together))
         for repair_idx, faulty_list in enumerate(faulty_routers_repair_together):
             faulty_sizes[repair_idx] = len(faulty_list)
-        for avail_idx, avalable_list in enumerate(routers_available_together):
-            available_sizes[avail_idx] = len(avalable_list)
+        for avail_idx, available_list in enumerate(routers_available_together):
+            available_sizes[avail_idx] = len(available_list)
         # want to go through these from largest to smallest
         faulty_sorted_idxs = np.argsort(faulty_sizes)[::-1]
         router_repair_dict = {}
@@ -268,17 +277,24 @@ class QRAMRouter:
             # pair faulty routers to these available ones, signified by shrinking
             # the size of the available router collection
             available_sorted_sizes[idx_to_insert_left] -= faulty_size
-            available_sizes = available_sorted_sizes[available_sorted_idxs]
-            # need to make sure that this is accessing the appropriate router list
+            # restore the original order of available sizes so that we can pair routers appropriately
+            available_sizes = available_sorted_sizes[np.argsort(available_sorted_idxs)]
             faulty_list = faulty_routers_repair_together[faulty_idx]
-            paired_list = routers_available_together[available_sorted_idxs[idx_to_insert_left]]
+            paired_list = copy.deepcopy(routers_available_together[available_sorted_idxs[idx_to_insert_left]])
             for sub_faulty_idx, faulty_router in enumerate(faulty_list):
-                router_repair_dict[faulty_router] = paired_list[sub_faulty_idx]
-                all_available_router_list.remove(paired_list[sub_faulty_idx])
+                paired_router = paired_list[sub_faulty_idx]
+                router_repair_dict[faulty_router] = paired_router
+                routers_available_together[available_sorted_idxs[idx_to_insert_left]].remove(paired_router)
+                all_available_router_list.remove(paired_router)
                 all_faulty_router_list.remove(faulty_router)
-        # now need to assign the remaining routers
-        single_repair_dict, num_bit_flips = self.router_repair_auction(all_faulty_router_list, all_available_router_list)
-        return router_repair_dict | single_repair_dict, num_bit_flips
+        if len(all_faulty_router_list) > 0:
+            # now need to assign the remaining routers
+            single_repair_dict, _ = self.router_repair_auction(all_faulty_router_list, all_available_router_list)
+            repair_dict = single_repair_dict | router_repair_dict
+            num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
+            return repair_dict, num_flag_qubits
+        num_flag_qubits = self.compute_number_of_flag_qubits(router_repair_dict)
+        return router_repair_dict, num_flag_qubits
 
     def bit_flip(self, ell, address):
         # flip first ell bits of router. Need to do some bin gymnastics
@@ -297,7 +313,7 @@ class QRAMRouter:
         return sum(map(int, format(diff_address, "b")))
 
     def router_repair(self, method="auction"):
-        """method can be 'auction' or 'bit_flip'"""
+        """method can be 'auction' or 'bit_flip' or 'together' """
         t_depth = self.tree_depth()
         # each has depth t_depth-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
@@ -339,7 +355,6 @@ class QRAMRouter:
         # attack the asymmetric problem (where the number of faulty routers and
         # available routers is not the same)
         prices = np.zeros(len(available_router_list))
-        max_num_bit_flips = 0
         unassigned = [router for router in faulty_router_list]
         assigned = {}
 
@@ -381,37 +396,37 @@ class QRAMRouter:
                     unassigned.append(assigned[available_router_list[best_idx]])
                 assigned[available_router_list[best_idx]] = winning_faulty_router
                 unassigned.remove(winning_faulty_router)
-                num_bit_flips = num_bit_flips_mat[highest_bidder_idx, best_idx]
-                if num_bit_flips > max_num_bit_flips:
-                    max_num_bit_flips = num_bit_flips
             if len(unassigned) == 0:
                 break
         repair_dict = {val: key for key, val in assigned.items()}
-        return repair_dict, max_num_bit_flips
+        num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
+        return repair_dict, num_flag_qubits
 
     def router_repair_bit_flip(self, faulty_router_list, available_router_list):
         t_depth = self.tree_depth()
-        num_faulty = len(faulty_router_list)
-        available_router_list_copy = copy.deepcopy(available_router_list)
+        unassigned_available_routers = copy.deepcopy(available_router_list)
+        unassigned_faulty_routers = copy.deepcopy(faulty_router_list)
         # will contain mapping of faulty routers to repair routers
         repair_dict = {}
-        fixed_faulty_list = []
         # only go up to ell = t_depth-2, since no savings if we do l=t_depth-1
         for ell in range(1, t_depth-1):
-            for fr_idx, faulty_router in enumerate(faulty_router_list):
-                if faulty_router not in fixed_faulty_list:
+            for faulty_router in faulty_router_list:
+                if faulty_router in unassigned_faulty_routers:
                     # perform bitwise NOT on the first ell bits of faulty_router
                     flipped_address = self.bit_flip(ell, faulty_router)
-                    if flipped_address in available_router_list_copy:
+                    if flipped_address in unassigned_available_routers:
                         repair_dict[faulty_router] = flipped_address
-                        fixed_faulty_list.append(faulty_router)
-                        available_router_list_copy.remove(flipped_address)
-            if len(fixed_faulty_list) == num_faulty:
+                        unassigned_available_routers.remove(flipped_address)
+                        unassigned_faulty_routers.remove(faulty_router)
+            if len(unassigned_faulty_routers) == 0:
                 # succeeded in repair with ell bit flips
-                return repair_dict, ell
-        # failed repair, proceed with greedy assignment requiring t_depth-1 bit flips
-        repair_dict = dict(zip(faulty_router_list, available_router_list))
-        return repair_dict, t_depth - 1
+                num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
+                return repair_dict, num_flag_qubits
+        # proceed with greedy assignment for remaining addresses
+        greedy_repairs = dict(zip(unassigned_faulty_routers, unassigned_available_routers))
+        repair_dict = repair_dict | greedy_repairs
+        num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
+        return repair_dict, num_flag_qubits
 
 
 class MonteCarloRouterInstances:

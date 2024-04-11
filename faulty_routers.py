@@ -1,3 +1,4 @@
+import copy
 from typing import Callable
 
 import numpy as np
@@ -201,6 +202,84 @@ class QRAMRouter:
             augmented_tree = self.right_child
         return original_tree, augmented_tree
 
+    def collect_routers_functioning_together(self, routers_available_for_assignment=None):
+        if routers_available_for_assignment is None:
+            routers_available_for_assignment = []
+        if self.right_child is None or not self.functioning:
+            return routers_available_for_assignment
+        # I'm not on the bottom and I'm functioning. Possible subtree available here
+        else:
+            t_depth = self.tree_depth()
+            functioning_below = self.lowest_router_list_functioning_or_not(functioning=True)
+            if 2**(t_depth-1) == len(functioning_below):
+                routers_available_for_assignment += [functioning_below, ]
+                return routers_available_for_assignment
+            else:
+                routers_available_for_assignment = self.right_child.collect_routers_functioning_together(
+                    routers_available_for_assignment=routers_available_for_assignment
+                )
+                routers_available_for_assignment = self.left_child.collect_routers_functioning_together(
+                    routers_available_for_assignment=routers_available_for_assignment
+                )
+                return routers_available_for_assignment
+
+    def collect_routers_to_assign_together(self, routers_to_assign_together=None):
+        if routers_to_assign_together is None:
+            routers_to_assign_together = []
+        # don't need to worry about this for routers at the bottom: addresses always assigned together
+        if self.right_child is None:
+            return routers_to_assign_together
+        # otherwise we aren't at the bottom.  If we have a faulty router
+        # then everybody below wants to be reassigned together
+        if not self.functioning:
+            routers_to_assign_together += [self.lowest_router_list_functioning_or_not(functioning=False), ]
+            return routers_to_assign_together
+        # If you're functioning, then continue with below routers
+        else:
+            routers_to_assign_together = self.right_child.collect_routers_to_assign_together(
+                routers_to_assign_together=routers_to_assign_together
+            )
+            routers_to_assign_together = self.left_child.collect_routers_to_assign_together(
+                routers_to_assign_together=routers_to_assign_together
+            )
+            return routers_to_assign_together
+
+    def router_repair_together(self, original_tree, augmented_tree):
+        faulty_routers_repair_together = original_tree.collect_routers_to_assign_together()
+        routers_available_together = augmented_tree.collect_routers_functioning_together()
+        all_faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
+        all_available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
+        faulty_sizes = np.zeros(len(faulty_routers_repair_together))
+        available_sizes = np.zeros(len(routers_available_together))
+        for repair_idx, faulty_list in enumerate(faulty_routers_repair_together):
+            faulty_sizes[repair_idx] = len(faulty_list)
+        for avail_idx, avalable_list in enumerate(routers_available_together):
+            available_sizes[avail_idx] = len(avalable_list)
+        # want to go through these from largest to smallest
+        faulty_sorted_idxs = np.argsort(faulty_sizes)[::-1]
+        router_repair_dict = {}
+        for faulty_idx in faulty_sorted_idxs:
+            faulty_size = faulty_sizes[faulty_idx]
+            if all(faulty_size > available_sizes):
+                return [], np.inf
+            available_sorted_idxs = np.argsort(available_sizes)
+            available_sorted_sizes = available_sizes[available_sorted_idxs]
+            idx_to_insert_left = np.searchsorted(available_sorted_sizes, faulty_size, side="left")
+            # pair faulty routers to these available ones, signified by shrinking
+            # the size of the available router collection
+            available_sorted_sizes[idx_to_insert_left] -= faulty_size
+            available_sizes = available_sorted_sizes[available_sorted_idxs]
+            # need to make sure that this is accessing the appropriate router list
+            faulty_list = faulty_routers_repair_together[faulty_idx]
+            paired_list = routers_available_together[available_sorted_idxs[idx_to_insert_left]]
+            for sub_faulty_idx, faulty_router in enumerate(faulty_list):
+                router_repair_dict[faulty_router] = paired_list[sub_faulty_idx]
+                all_available_router_list.remove(paired_list[sub_faulty_idx])
+                all_faulty_router_list.remove(faulty_router)
+        # now need to assign the remaining routers
+        single_repair_dict, num_bit_flips = self.router_repair_auction(all_faulty_router_list, all_available_router_list)
+        return router_repair_dict | single_repair_dict, num_bit_flips
+
     def bit_flip(self, ell, address):
         # flip first ell bits of router. Need to do some bin gymnastics
         # -1 is because we are looking at the routers as opposed to the addresses
@@ -218,7 +297,7 @@ class QRAMRouter:
         return sum(map(int, format(diff_address, "b")))
 
     def router_repair(self, method="auction"):
-        """method can be 'auction' or 'straight'"""
+        """method can be 'auction' or 'bit_flip'"""
         t_depth = self.tree_depth()
         # each has depth t_depth-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
@@ -235,8 +314,10 @@ class QRAMRouter:
             return [], np.inf
         if method == "auction":
             return self.router_repair_auction(faulty_router_list, available_router_list)
-        elif method == "straight":
-            return self.router_repair_straight(faulty_router_list, available_router_list)
+        elif method == "bit_flip":
+            return self.router_repair_bit_flip(faulty_router_list, available_router_list)
+        elif method == "together":
+            return self.router_repair_together(original_tree, augmented_tree)
         else:
             raise RuntimeError("method not supported")
 
@@ -287,29 +368,33 @@ class QRAMRouter:
                 faulty_routers_wanting = np.squeeze(
                     np.argwhere(best_avail_for_unassigned == best_idx), axis=1
                 )
+                # take the highest bidder from among that group
                 _highest_bidder_idx = np.argmax(bid_increments[faulty_routers_wanting])
+                # _highest_bidder_idx is the index of bid_increments[faulty_routers_wanting]
+                # with the highest bid. So we need to take that index of faulty_routers_wanting
+                # to extract the actual index (in terms of entries to faulty_router_list)
                 highest_bidder_idx = faulty_routers_wanting[_highest_bidder_idx]
-                faulty_router = faulty_router_list[highest_bidder_idx]
-                highest_bid = bid_increments[highest_bidder_idx]
-                prices[best_idx] += highest_bid + eps
+                winning_faulty_router = faulty_router_list[highest_bidder_idx]
+                winning_bid = bid_increments[highest_bidder_idx]
+                prices[best_idx] += winning_bid + eps
                 if available_router_list[best_idx] in assigned:
                     unassigned.append(assigned[available_router_list[best_idx]])
-                assigned[available_router_list[best_idx]] = faulty_router
-                unassigned.remove(faulty_router)
+                assigned[available_router_list[best_idx]] = winning_faulty_router
+                unassigned.remove(winning_faulty_router)
                 num_bit_flips = num_bit_flips_mat[highest_bidder_idx, best_idx]
                 if num_bit_flips > max_num_bit_flips:
                     max_num_bit_flips = num_bit_flips
             if len(unassigned) == 0:
                 break
         repair_dict = {val: key for key, val in assigned.items()}
-        repair_list = [repair_dict[faulty_router] for faulty_router in faulty_router_list]
-        return repair_list, max_num_bit_flips
+        return repair_dict, max_num_bit_flips
 
-    def router_repair_straight(self, faulty_router_list, available_router_list):
+    def router_repair_bit_flip(self, faulty_router_list, available_router_list):
         t_depth = self.tree_depth()
         num_faulty = len(faulty_router_list)
+        available_router_list_copy = copy.deepcopy(available_router_list)
         # will contain mapping of faulty routers to repair routers
-        repair_list = np.empty(num_faulty, dtype=object)
+        repair_dict = {}
         fixed_faulty_list = []
         # only go up to ell = t_depth-2, since no savings if we do l=t_depth-1
         for ell in range(1, t_depth-1):
@@ -317,14 +402,16 @@ class QRAMRouter:
                 if faulty_router not in fixed_faulty_list:
                     # perform bitwise NOT on the first ell bits of faulty_router
                     flipped_address = self.bit_flip(ell, faulty_router)
-                    if flipped_address in available_router_list:
-                        repair_list[fr_idx] = flipped_address
+                    if flipped_address in available_router_list_copy:
+                        repair_dict[faulty_router] = flipped_address
                         fixed_faulty_list.append(faulty_router)
+                        available_router_list_copy.remove(flipped_address)
             if len(fixed_faulty_list) == num_faulty:
                 # succeeded in repair with ell bit flips
-                return repair_list, ell
+                return repair_dict, ell
         # failed repair, proceed with greedy assignment requiring t_depth-1 bit flips
-        return available_router_list[0: num_faulty], t_depth - 1
+        repair_dict = dict(zip(faulty_router_list, available_router_list))
+        return repair_dict, t_depth - 1
 
 
 class MonteCarloRouterInstances:

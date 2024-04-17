@@ -203,13 +203,11 @@ class QRAMRouter:
         return original_tree, augmented_tree
 
     @staticmethod
-    def compute_number_of_flag_qubits(repair_dict):
+    def compute_flag_qubits(repair_dict):
         """assumption is that the keys of repair_dict are faulty routers and
-        the values are repair routers they have been assigned to"""
-        diff_addresses = [format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
-                          for (faulty_address, repair_address) in repair_dict.items()]
-        unique_addresses = set(diff_addresses)
-        return unique_addresses
+                the values are repair routers they have been assigned to"""
+        return [format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
+                for (faulty_address, repair_address) in repair_dict.items()]
 
     def collect_routers_functioning_together(self, routers_available_for_assignment=None):
         if routers_available_for_assignment is None:
@@ -258,6 +256,20 @@ class QRAMRouter:
         routers_available_together = augmented_tree.collect_routers_functioning_together()
         all_faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
         all_available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
+        flattened_faulty_routers_together = [router for router_list in faulty_routers_repair_together
+                                             for router in router_list]
+        flattened_available_routers_together = [router for router_list in routers_available_together
+                                                for router in router_list]
+        single_faulty_routers = [router for router in all_faulty_router_list
+                                 if router not in flattened_faulty_routers_together]
+        single_available_routers = [router for router in all_available_router_list
+                                 if router not in flattened_available_routers_together]
+        if len(single_faulty_routers) > 0:
+            router_repair_dict, _ = self.router_repair_auction(single_faulty_routers, single_available_routers)
+            repair_bit_flips = self.bit_flip_pattern(router_repair_dict.keys(), router_repair_dict.values())
+        else:
+            router_repair_dict = {}
+            repair_bit_flips = []
         faulty_sizes = np.zeros(len(faulty_routers_repair_together))
         available_sizes = np.zeros(len(routers_available_together))
         for repair_idx, faulty_list in enumerate(faulty_routers_repair_together):
@@ -266,35 +278,41 @@ class QRAMRouter:
             available_sizes[avail_idx] = len(available_list)
         # want to go through these from largest to smallest
         faulty_sorted_idxs = np.argsort(faulty_sizes)[::-1]
-        router_repair_dict = {}
         for faulty_idx in faulty_sorted_idxs:
             faulty_size = faulty_sizes[faulty_idx]
+            faulty_list = faulty_routers_repair_together[faulty_idx]
             if all(faulty_size > available_sizes):
                 return [], np.inf
+            # find minimum available sizes
             available_sorted_idxs = np.argsort(available_sizes)
             available_sorted_sizes = available_sizes[available_sorted_idxs]
             idx_to_insert_left = np.searchsorted(available_sorted_sizes, faulty_size, side="left")
+            # iterate through these from largest to smallest so that if we don't find
+            # a match in terms of an already used flag qubit, we use the smallest possible
+            # available pod of routers
+            possible_pair_idxs = np.arange(idx_to_insert_left, len(available_sorted_sizes))[::-1]
+            # if an assignment corresponds to an existing flag qubit, take it
+            for possible_pair_idx in possible_pair_idxs:
+                possible_pair_list = routers_available_together[available_sorted_idxs[possible_pair_idx]]
+                # just need to check the first one
+                possible_bit_flip = self.bit_flip_pattern(faulty_list[0], possible_pair_list[0])
+                if possible_bit_flip in repair_bit_flips:
+                    break
             # pair faulty routers to these available ones, signified by shrinking
             # the size of the available router collection
-            available_sorted_sizes[idx_to_insert_left] -= faulty_size
+            available_sorted_sizes[possible_pair_idx] -= faulty_size
             # restore the original order of available sizes so that we can pair routers appropriately
             available_sizes = available_sorted_sizes[np.argsort(available_sorted_idxs)]
-            faulty_list = faulty_routers_repair_together[faulty_idx]
-            paired_list = copy.deepcopy(routers_available_together[available_sorted_idxs[idx_to_insert_left]])
+            paired_list = copy.deepcopy(routers_available_together[available_sorted_idxs[possible_pair_idx]])
             for sub_faulty_idx, faulty_router in enumerate(faulty_list):
                 paired_router = paired_list[sub_faulty_idx]
                 router_repair_dict[faulty_router] = paired_router
-                routers_available_together[available_sorted_idxs[idx_to_insert_left]].remove(paired_router)
+                repair_bit_flips = set(repair_bit_flips.append(self.bit_flip_pattern(faulty_router, paired_router)))
+                routers_available_together[available_sorted_idxs[possible_pair_idx]].remove(paired_router)
                 all_available_router_list.remove(paired_router)
                 all_faulty_router_list.remove(faulty_router)
-        if len(all_faulty_router_list) > 0:
-            # now need to assign the remaining routers
-            single_repair_dict, _ = self.router_repair_auction(all_faulty_router_list, all_available_router_list)
-            repair_dict = single_repair_dict | router_repair_dict
-            num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-            return repair_dict, len(num_flag_qubits)
-        num_flag_qubits = self.compute_number_of_flag_qubits(router_repair_dict)
-        return router_repair_dict, len(num_flag_qubits)
+        flag_qubits = set(self.compute_flag_qubits(router_repair_dict))
+        return router_repair_dict, len(flag_qubits)
 
     def bit_flip(self, ell, address):
         # flip first ell bits of router. Need to do some bin gymnastics
@@ -304,6 +322,12 @@ class QRAMRouter:
         flipped_address = int(bit_flip_mask, 2) ^ int(address, 2)
         flipped_address_bin = format(flipped_address, f"#0{t_depth + 2 - 1}b")
         return flipped_address_bin
+
+    @staticmethod
+    @np.vectorize
+    def bit_flip_pattern(faulty_address, repair_address):
+        """returns the number of bit flips required to map faulty to repair"""
+        return int(faulty_address, 2) ^ int(repair_address, 2)
 
     @staticmethod
     @np.vectorize
@@ -398,9 +422,29 @@ class QRAMRouter:
                 unassigned.remove(winning_faulty_router)
             if len(unassigned) == 0:
                 break
-        repair_dict = {val: key for key, val in assigned.items()}
-        num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-        return repair_dict, len(num_flag_qubits)
+        # postprocess:
+        repair_dict = {faulty_router: avail_router for avail_router, faulty_router in assigned.items()}
+        # bit_flip_patterns = self.bit_flip_pattern(repair_dict.keys(), repair_dict.values())
+        # # look for now only at unassigned
+        # post_frl, post_arl = np.meshgrid(faulty_router_list, unassigned, indexing="ij")
+        # post_bit_flips_mat = self.num_bit_flips(post_frl, post_arl)
+        # # TODO don't want to continually reassign?
+        # same_bit_flips = np.zeros(len(faulty_router_list))
+        # which_assignment = []
+        # for faulty_idx, bit_flip in enumerate(bit_flip_patterns):
+        #     available_assignments = np.where(bit_flip == post_bit_flips_mat, 1.0, 0.0)
+        #     same_bit_flips[faulty_idx] = sum(available_assignments)
+        #     which_assignment.append(np.argwhere(available_assignments))
+        # sorted_idxs = np.argsort(same_bit_flips)[::-1]
+        # for sorted_idx in sorted_idxs:
+        #     if same_bit_flips[sorted_idx] > 1:
+        #         assignment_idxs = which_assignment[sorted_idx]
+        #         for assignment_idx in assignment_idxs:
+        #             faulty_router_idx, unassigned_idx = assignment_idx
+        #             repair_dict[faulty_router_list[faulty_router_idx]] =
+
+        flag_qubits = self.compute_flag_qubits(repair_dict)
+        return repair_dict, len(set(flag_qubits))
 
     def router_repair_bit_flip(self, faulty_router_list, available_router_list):
         t_depth = self.tree_depth()
@@ -420,13 +464,13 @@ class QRAMRouter:
                         unassigned_faulty_routers.remove(faulty_router)
             if len(unassigned_faulty_routers) == 0:
                 # succeeded in repair with ell bit flips
-                num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-                return repair_dict, len(num_flag_qubits)
+                flag_qubits = set(self.compute_flag_qubits(repair_dict))
+                return repair_dict, len(flag_qubits)
         # proceed with greedy assignment for remaining addresses
         greedy_repairs = dict(zip(unassigned_faulty_routers, unassigned_available_routers))
         repair_dict = repair_dict | greedy_repairs
-        num_flag_qubits = self.compute_number_of_flag_qubits(repair_dict)
-        return repair_dict, len(num_flag_qubits)
+        flag_qubits = set(self.compute_flag_qubits(repair_dict))
+        return repair_dict, len(flag_qubits)
 
 
 class MonteCarloRouterInstances:
@@ -537,30 +581,62 @@ class SimpleReallocationFailure(Exception):
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    TREE_DEPTH = 6
-    EPS = 0.2
+    TREE_DEPTH = 10
+    EPS = 0.05
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
     RNG_SEED = 2543567243234588543
     rng = np.random.default_rng(RNG_SEED)  # 27585353
     RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
+
+    #########
+    # mcinstance = MonteCarloRouterInstances(
+    #     TREE_DEPTH,
+    #     EPS,
+    #     NUM_INSTANCES,
+    #     RNG_SEED,
+    # )
+    # mcinstance.run()
+    #######
+
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)
-    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[934])
+    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[2770]) # half full n=6 #255
     FULLTREE.print_tree()
+    assignment, FLAG_QUBITS = FULLTREE.router_repair(method="auction")
+    assignment_bit_flip, flag_qubits_bit_flip = FULLTREE.router_repair(method="bit_flip")
+    assignment_together, flag_qubits_together = FULLTREE.router_repair(method="together")
     print("-------------------------------")
+    routers_together = FULLTREE.collect_routers_to_assign_together()
+    print("n - 1")
     avail_router = FULLTREE.lowest_router_list_functioning_or_not(functioning=True)
-    desired_depth_subQ = TREE_DEPTH - 2
+    desired_depth_subQ = TREE_DEPTH - 1
     if len(avail_router) >= 2**(desired_depth_subQ - 1):
+        print("trying")
         SUBTREE = FULLTREE.simple_reallocation(desired_depth_subQ, 0)
         FULLTREE.print_tree()
         print(SUBTREE)
+    print("-------------------------------")
 
-    mcinstance = MonteCarloRouterInstances(
-        TREE_DEPTH,
-        EPS,
-        NUM_INSTANCES,
-        RNG_SEED,
-    )
-    mcinstance.run()
+    for idx in range(NUM_INSTANCES):
+        MYTREE = QRAMRouter()
+        FULLTREE = MYTREE.create_tree(TREE_DEPTH)
+        FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[idx])
+        # FULLTREE.print_tree()
+        # print("-------------------------------")
+        # print("n - 1")
+        avail_router = FULLTREE.lowest_router_list_functioning_or_not(functioning=True)
+        desired_depth_subQ = TREE_DEPTH - 1
+        if len(avail_router) >= 2 ** (desired_depth_subQ - 1):
+            print(f"trying {idx}")
+            SUBTREE = FULLTREE.simple_reallocation(desired_depth_subQ, 0)
+            # FULLTREE.print_tree()
+            print(SUBTREE)
+        # print("-------------------------------")
+
+
+
+    # for idx, (n_2, num_bit) in enumerate(zip(n2_success, num_bit_flips)):
+    #     if n_2 == 0 and num_bit != np.inf:
+    #         print(idx)

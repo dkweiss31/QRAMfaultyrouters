@@ -251,25 +251,12 @@ class QRAMRouter:
             )
             return routers_to_assign_together
 
-    def router_repair_together(self, original_tree, augmented_tree):
+    def router_repair_together(self):
+        original_tree, augmented_tree = self.assign_original_and_augmented()
         faulty_routers_repair_together = original_tree.collect_routers_to_assign_together()
         routers_available_together = augmented_tree.collect_routers_functioning_together()
         all_faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
         all_available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
-        flattened_faulty_routers_together = [router for router_list in faulty_routers_repair_together
-                                             for router in router_list]
-        flattened_available_routers_together = [router for router_list in routers_available_together
-                                                for router in router_list]
-        single_faulty_routers = [router for router in all_faulty_router_list
-                                 if router not in flattened_faulty_routers_together]
-        single_available_routers = [router for router in all_available_router_list
-                                 if router not in flattened_available_routers_together]
-        if len(single_faulty_routers) > 0:
-            router_repair_dict, _ = self.router_repair_auction(single_faulty_routers, single_available_routers)
-            repair_bit_flips = self.bit_flip_pattern(router_repair_dict.keys(), router_repair_dict.values())
-        else:
-            router_repair_dict = {}
-            repair_bit_flips = []
         faulty_sizes = np.zeros(len(faulty_routers_repair_together))
         available_sizes = np.zeros(len(routers_available_together))
         for repair_idx, faulty_list in enumerate(faulty_routers_repair_together):
@@ -278,6 +265,8 @@ class QRAMRouter:
             available_sizes[avail_idx] = len(available_list)
         # want to go through these from largest to smallest
         faulty_sorted_idxs = np.argsort(faulty_sizes)[::-1]
+        router_repair_dict = {}
+        repair_flag_qubits = []
         for faulty_idx in faulty_sorted_idxs:
             faulty_size = faulty_sizes[faulty_idx]
             faulty_list = faulty_routers_repair_together[faulty_idx]
@@ -295,8 +284,8 @@ class QRAMRouter:
             for possible_pair_idx in possible_pair_idxs:
                 possible_pair_list = routers_available_together[available_sorted_idxs[possible_pair_idx]]
                 # just need to check the first one
-                possible_bit_flip = self.bit_flip_pattern(faulty_list[0], possible_pair_list[0])
-                if possible_bit_flip in repair_bit_flips:
+                possible_flag_qubit = self.compute_flag_qubits({faulty_list[0]: possible_pair_list[0]})
+                if possible_flag_qubit in repair_flag_qubits:
                     break
             # pair faulty routers to these available ones, signified by shrinking
             # the size of the available router collection
@@ -307,10 +296,18 @@ class QRAMRouter:
             for sub_faulty_idx, faulty_router in enumerate(faulty_list):
                 paired_router = paired_list[sub_faulty_idx]
                 router_repair_dict[faulty_router] = paired_router
-                repair_bit_flips = set(repair_bit_flips.append(self.bit_flip_pattern(faulty_router, paired_router)))
+                flag_qubit = self.compute_flag_qubits({faulty_router: paired_router})[0]
+                repair_flag_qubits.append(flag_qubit)
+                repair_flag_qubits = list(set(repair_flag_qubits))
                 routers_available_together[available_sorted_idxs[possible_pair_idx]].remove(paired_router)
                 all_available_router_list.remove(paired_router)
                 all_faulty_router_list.remove(faulty_router)
+        if len(all_faulty_router_list) > 0:
+            # now need to assign the remaining routers
+            single_repair_dict, _ = self.router_repair_auction(
+                all_faulty_router_list, all_available_router_list, existing_flag_qubits=repair_flag_qubits
+            )
+            router_repair_dict = single_repair_dict | router_repair_dict
         flag_qubits = set(self.compute_flag_qubits(router_repair_dict))
         return router_repair_dict, len(flag_qubits)
 
@@ -327,7 +324,7 @@ class QRAMRouter:
     @np.vectorize
     def bit_flip_pattern(faulty_address, repair_address):
         """returns the number of bit flips required to map faulty to repair"""
-        return int(faulty_address, 2) ^ int(repair_address, 2)
+        return format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
 
     @staticmethod
     @np.vectorize
@@ -353,15 +350,17 @@ class QRAMRouter:
             # QRAM unrepairable
             return [], np.inf
         if method == "auction":
-            return self.router_repair_auction(faulty_router_list, available_router_list)
+            repair_dict, num_flag_qubits = self.router_repair_auction(faulty_router_list, available_router_list)
         elif method == "bit_flip":
-            return self.router_repair_bit_flip(faulty_router_list, available_router_list)
+            repair_dict, num_flag_qubits = self.router_repair_bit_flip(faulty_router_list, available_router_list)
         elif method == "together":
-            return self.router_repair_together(original_tree, augmented_tree)
+            repair_dict, num_flag_qubits = self.router_repair_together()
         else:
             raise RuntimeError("method not supported")
+        self.verify_allocation(repair_dict)
+        return repair_dict, num_flag_qubits
 
-    def router_repair_auction(self, faulty_router_list, available_router_list, eps=None):
+    def router_repair_auction(self, faulty_router_list, available_router_list, eps=None, existing_flag_qubits=None):
         num_faulty = len(faulty_router_list)
         # see Bertsekas https://link.springer.com/article/10.1007/BF00247653 this eps
         # is introduced to avoid the situation where there are only a few available routers
@@ -372,6 +371,11 @@ class QRAMRouter:
         frl, arl = np.meshgrid(faulty_router_list, available_router_list, indexing="ij")
         # cost is defined as the number of required bit flips
         num_bit_flips_mat = self.num_bit_flips(frl, arl)
+        # for already used bit flips, zero cost
+        if existing_flag_qubits is not None:
+            bit_flip_pattern = self.bit_flip_pattern(frl, arl)
+            mask = np.isin(bit_flip_pattern, existing_flag_qubits)
+            num_bit_flips_mat[mask] = 0
         # the algorithm is usually described in terms of maximizing benefit,
         # so we take the negative of the cost
         benefit_matrix = - num_bit_flips_mat
@@ -424,24 +428,30 @@ class QRAMRouter:
                 break
         # postprocess:
         repair_dict = {faulty_router: avail_router for avail_router, faulty_router in assigned.items()}
-        # bit_flip_patterns = self.bit_flip_pattern(repair_dict.keys(), repair_dict.values())
-        # # look for now only at unassigned
+        #TODO commenting out for now. Issue with the below is that once you start reassigning, the flag
+        # qubits you think you are using are now no longer being used.
+
+        # used_bit_flip_patterns = self.bit_flip_pattern(repair_dict.keys(), repair_dict.values())
+        # # # look for now only at unassigned
         # post_frl, post_arl = np.meshgrid(faulty_router_list, unassigned, indexing="ij")
-        # post_bit_flips_mat = self.num_bit_flips(post_frl, post_arl)
-        # # TODO don't want to continually reassign?
+        # bit_flips_to_unassigned = self.bit_flip_pattern(post_frl, post_arl)
         # same_bit_flips = np.zeros(len(faulty_router_list))
         # which_assignment = []
-        # for faulty_idx, bit_flip in enumerate(bit_flip_patterns):
-        #     available_assignments = np.where(bit_flip == post_bit_flips_mat, 1.0, 0.0)
+        # for faulty_idx, bit_flip in enumerate(used_bit_flip_patterns):
+        #     available_assignments = np.where(bit_flip == bit_flips_to_unassigned, 1.0, 0.0)
         #     same_bit_flips[faulty_idx] = sum(available_assignments)
         #     which_assignment.append(np.argwhere(available_assignments))
         # sorted_idxs = np.argsort(same_bit_flips)[::-1]
+        # already_looped_over_faulty_routers = []
         # for sorted_idx in sorted_idxs:
+        #     already_looped_over_faulty_routers.append(list(repair_dict.keys())[sorted_idx])
         #     if same_bit_flips[sorted_idx] > 1:
         #         assignment_idxs = which_assignment[sorted_idx]
         #         for assignment_idx in assignment_idxs:
         #             faulty_router_idx, unassigned_idx = assignment_idx
-        #             repair_dict[faulty_router_list[faulty_router_idx]] =
+        #             faulty_router_to_reassign = list(repair_dict.keys())[faulty_router_idx]
+        #             if faulty_router_to_reassign not in already_looped_over_faulty_routers:
+        #                 repair_dict[faulty_router_list[faulty_router_idx]] =
 
         flag_qubits = self.compute_flag_qubits(repair_dict)
         return repair_dict, len(set(flag_qubits))
@@ -471,6 +481,17 @@ class QRAMRouter:
         repair_dict = repair_dict | greedy_repairs
         flag_qubits = set(self.compute_flag_qubits(repair_dict))
         return repair_dict, len(flag_qubits)
+
+    def verify_allocation(self, repair_dict):
+        original_tree, augmented_tree = self.assign_original_and_augmented()
+        faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
+        available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
+        # all routers assigned
+        assert len(repair_dict.keys()) == len(faulty_router_list)
+        # no repeated assignments
+        assert len(repair_dict.values()) == len(set(repair_dict.values()))
+        # only assigned to live routers
+        assert all(np.isin(list(repair_dict.values()), available_router_list))
 
 
 class MonteCarloRouterInstances:
@@ -581,12 +602,13 @@ class SimpleReallocationFailure(Exception):
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    TREE_DEPTH = 10
-    EPS = 0.05
+    TREE_DEPTH = 7
+    EPS = 0.10
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
-    RNG_SEED = 2543567243234588543
+    # tree_Depth = 10, eps = 0.05 rng 2543567243234588543 2770 below
+    RNG_SEED = 254356724345
     rng = np.random.default_rng(RNG_SEED)  # 27585353
     RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
 
@@ -602,9 +624,9 @@ if __name__ == "__main__":
 
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)
-    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[2770]) # half full n=6 #255
+    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[270]) # half full n=6 #255
     FULLTREE.print_tree()
-    assignment, FLAG_QUBITS = FULLTREE.router_repair(method="auction")
+    assignment_auction, flag_qubits_auction = FULLTREE.router_repair(method="auction")
     assignment_bit_flip, flag_qubits_bit_flip = FULLTREE.router_repair(method="bit_flip")
     assignment_together, flag_qubits_together = FULLTREE.router_repair(method="together")
     print("-------------------------------")

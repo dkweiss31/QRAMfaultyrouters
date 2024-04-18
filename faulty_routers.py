@@ -1,4 +1,5 @@
 import copy
+import time
 from typing import Callable
 
 import numpy as np
@@ -209,6 +210,11 @@ class QRAMRouter:
         return [format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
                 for (faulty_address, repair_address) in repair_dict.items()]
 
+    def total_flag_cost(self, repair_dict):
+        unique_flag_qubits = set(self.compute_flag_qubits(repair_dict))
+        num_bit_flips = [sum(map(int, flag)) for flag in unique_flag_qubits]
+        return sum(num_bit_flips)
+
     def collect_routers_functioning_together(self, routers_available_for_assignment=None):
         if routers_available_for_assignment is None:
             routers_available_for_assignment = []
@@ -361,6 +367,8 @@ class QRAMRouter:
             repair_dict, num_flag_qubits = self.router_repair_bit_flip(faulty_router_list, available_router_list)
         elif method == "together":
             repair_dict, num_flag_qubits = self.router_repair_together()
+            if num_flag_qubits == np.inf:
+                return [], np.inf
         elif method == "global":
             repair_dict, num_flag_qubits = self.router_repair_global(faulty_router_list, available_router_list)
         else:
@@ -369,23 +377,27 @@ class QRAMRouter:
         return repair_dict, num_flag_qubits
 
     def router_repair_global(self, faulty_router_list, available_router_list):
-        num_faulty = len(faulty_router_list)
-        frl, arl = np.meshgrid(faulty_router_list, available_router_list, indexing="ij")
-        bit_flip_pattern_mat = self.bit_flip_pattern_int(frl, arl)
-        # this is likely the slowest step
-        bit_flip_patterns, bit_flip_pattern_occurences = np.unique(bit_flip_pattern_mat, return_counts=True)
-        sorted_idxs = np.argsort(bit_flip_pattern_occurences)[::-1]
+        faulty_router_list = np.array(faulty_router_list)
+        available_router_list = np.array(available_router_list)
         repair_dict = {}
-        for sorted_idx in sorted_idxs:
-            bit_flip_pattern = bit_flip_patterns[sorted_idx]
+        while True:
+            frl, arl = np.meshgrid(faulty_router_list, available_router_list, indexing="ij")
+            bit_flip_pattern_mat = self.bit_flip_pattern_int(frl, arl)
+            # this is likely the slowest step
+            # can change since we only take the largest?
+            bit_flip_patterns, bit_flip_pattern_occurences = np.unique(bit_flip_pattern_mat, return_counts=True)
+            sorted_idxs = np.argsort(bit_flip_pattern_occurences)
+            bit_flip_pattern = bit_flip_patterns[sorted_idxs[-1]]
             assignment_idxs = np.argwhere(bit_flip_pattern_mat == bit_flip_pattern)
             for assignment_idx in assignment_idxs:
                 faulty_idx, avail_idx = assignment_idx
                 faulty_router = faulty_router_list[faulty_idx]
                 avail_router = available_router_list[avail_idx]
-                if faulty_router not in repair_dict and avail_router not in repair_dict.values():
-                    repair_dict[faulty_router] = avail_router
-            if len(repair_dict) == num_faulty:
+                repair_dict[faulty_router] = avail_router
+            # don't need to worry anymore about reassigning these
+            faulty_router_list = np.delete(faulty_router_list, assignment_idxs[:, 0])
+            available_router_list = np.delete(available_router_list, assignment_idxs[:, 1])
+            if len(faulty_router_list) == 0:
                 break
         flag_qubits = set(self.compute_flag_qubits(repair_dict))
         return repair_dict, len(flag_qubits)
@@ -607,13 +619,13 @@ class SimpleReallocationFailure(Exception):
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    TREE_DEPTH = 7
-    EPS = 0.10
+    TREE_DEPTH = 12
+    EPS = 0.05
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
     # tree_Depth = 10, eps = 0.05 rng 2543567243234588543 2770 below
-    RNG_SEED = 254356724345
+    RNG_SEED = 2543567243234588543
     rng = np.random.default_rng(RNG_SEED)  # 27585353
     RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
 
@@ -629,11 +641,23 @@ if __name__ == "__main__":
 
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)
-    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[270]) # half full n=6 #255
+    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[2776]) # half full n=6 #255
     FULLTREE.print_tree()
+    start_time = time.time()
     assignment_auction, flag_qubits_auction = FULLTREE.router_repair(method="auction")
+    time_1 = time.time()
     assignment_bit_flip, flag_qubits_bit_flip = FULLTREE.router_repair(method="bit_flip")
+    time_2 = time.time()
     assignment_together, flag_qubits_together = FULLTREE.router_repair(method="together")
+    time_3 = time.time()
+    assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
+    time_4 = time.time()
+    print(time_1 - start_time, time_2 - time_1, time_3 - time_2, time_4-time_3)
+    total_auction = FULLTREE.total_flag_cost(assignment_auction)
+    total_bit_flip = FULLTREE.total_flag_cost(assignment_bit_flip)
+    total_together = FULLTREE.total_flag_cost(assignment_together)
+    total_global = FULLTREE.total_flag_cost(assignment_global)
+
     print("-------------------------------")
     routers_together = FULLTREE.collect_routers_to_assign_together()
     print("n - 1")

@@ -322,6 +322,12 @@ class QRAMRouter:
 
     @staticmethod
     @np.vectorize
+    def bit_flip_pattern_int(faulty_address, repair_address):
+        """returns the number of bit flips required to map faulty to repair"""
+        return int(faulty_address, 2) ^ int(repair_address, 2)
+
+    @staticmethod
+    @np.vectorize
     def bit_flip_pattern(faulty_address, repair_address):
         """returns the number of bit flips required to map faulty to repair"""
         return format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
@@ -355,10 +361,34 @@ class QRAMRouter:
             repair_dict, num_flag_qubits = self.router_repair_bit_flip(faulty_router_list, available_router_list)
         elif method == "together":
             repair_dict, num_flag_qubits = self.router_repair_together()
+        elif method == "global":
+            repair_dict, num_flag_qubits = self.router_repair_global(faulty_router_list, available_router_list)
         else:
             raise RuntimeError("method not supported")
         self.verify_allocation(repair_dict)
         return repair_dict, num_flag_qubits
+
+    def router_repair_global(self, faulty_router_list, available_router_list):
+        num_faulty = len(faulty_router_list)
+        frl, arl = np.meshgrid(faulty_router_list, available_router_list, indexing="ij")
+        bit_flip_pattern_mat = self.bit_flip_pattern_int(frl, arl)
+        # this is likely the slowest step
+        bit_flip_patterns, bit_flip_pattern_occurences = np.unique(bit_flip_pattern_mat, return_counts=True)
+        sorted_idxs = np.argsort(bit_flip_pattern_occurences)[::-1]
+        repair_dict = {}
+        for sorted_idx in sorted_idxs:
+            bit_flip_pattern = bit_flip_patterns[sorted_idx]
+            assignment_idxs = np.argwhere(bit_flip_pattern_mat == bit_flip_pattern)
+            for assignment_idx in assignment_idxs:
+                faulty_idx, avail_idx = assignment_idx
+                faulty_router = faulty_router_list[faulty_idx]
+                avail_router = available_router_list[avail_idx]
+                if faulty_router not in repair_dict and avail_router not in repair_dict.values():
+                    repair_dict[faulty_router] = avail_router
+            if len(repair_dict) == num_faulty:
+                break
+        flag_qubits = set(self.compute_flag_qubits(repair_dict))
+        return repair_dict, len(flag_qubits)
 
     def router_repair_auction(self, faulty_router_list, available_router_list, eps=None, existing_flag_qubits=None):
         num_faulty = len(faulty_router_list)
@@ -428,31 +458,6 @@ class QRAMRouter:
                 break
         # postprocess:
         repair_dict = {faulty_router: avail_router for avail_router, faulty_router in assigned.items()}
-        #TODO commenting out for now. Issue with the below is that once you start reassigning, the flag
-        # qubits you think you are using are now no longer being used.
-
-        # used_bit_flip_patterns = self.bit_flip_pattern(repair_dict.keys(), repair_dict.values())
-        # # # look for now only at unassigned
-        # post_frl, post_arl = np.meshgrid(faulty_router_list, unassigned, indexing="ij")
-        # bit_flips_to_unassigned = self.bit_flip_pattern(post_frl, post_arl)
-        # same_bit_flips = np.zeros(len(faulty_router_list))
-        # which_assignment = []
-        # for faulty_idx, bit_flip in enumerate(used_bit_flip_patterns):
-        #     available_assignments = np.where(bit_flip == bit_flips_to_unassigned, 1.0, 0.0)
-        #     same_bit_flips[faulty_idx] = sum(available_assignments)
-        #     which_assignment.append(np.argwhere(available_assignments))
-        # sorted_idxs = np.argsort(same_bit_flips)[::-1]
-        # already_looped_over_faulty_routers = []
-        # for sorted_idx in sorted_idxs:
-        #     already_looped_over_faulty_routers.append(list(repair_dict.keys())[sorted_idx])
-        #     if same_bit_flips[sorted_idx] > 1:
-        #         assignment_idxs = which_assignment[sorted_idx]
-        #         for assignment_idx in assignment_idxs:
-        #             faulty_router_idx, unassigned_idx = assignment_idx
-        #             faulty_router_to_reassign = list(repair_dict.keys())[faulty_router_idx]
-        #             if faulty_router_to_reassign not in already_looped_over_faulty_routers:
-        #                 repair_dict[faulty_router_list[faulty_router_idx]] =
-
         flag_qubits = self.compute_flag_qubits(repair_dict)
         return repair_dict, len(set(flag_qubits))
 

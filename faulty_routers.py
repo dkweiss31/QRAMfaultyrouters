@@ -78,7 +78,13 @@ class QRAMRouter:
             self.right_child.set_attr_self_and_below(attr, val)
             self.left_child.set_attr_self_and_below(attr, val)
 
-    def fabrication_instance(self, failure_rate=0.3, rn_list=None):
+    def fabrication_instance(
+        self,
+        failure_rate=0.3,
+        rn_list=None,
+        k_level=0,
+        top_three_functioning=False
+    ):
         """this function utilizes a list of random numbers (if passed) to decide
         if a given router is faulty. It strips off the first one and returns
         the remainder of the list for use for deciding if other routers are faulty"""
@@ -88,14 +94,18 @@ class QRAMRouter:
         else:
             rnd = rn_list[0]
             new_rn_list = rn_list[1:]
-        if rnd < failure_rate:
-            self.set_attr_self_and_below("functioning", False)
-            return new_rn_list
-        else:
+        if rnd > failure_rate or (top_three_functioning and k_level <= 1):
             self.functioning = True
             if self.right_child:
-                new_rn_list = self.right_child.fabrication_instance(failure_rate, rn_list=new_rn_list)
-                new_rn_list = self.left_child.fabrication_instance(failure_rate, rn_list=new_rn_list)
+                new_rn_list = self.right_child.fabrication_instance(
+                    failure_rate, rn_list=new_rn_list, k_level=k_level+1, top_three_functioning=top_three_functioning
+                )
+                new_rn_list = self.left_child.fabrication_instance(
+                    failure_rate, rn_list=new_rn_list, k_level=k_level+1, top_three_functioning=top_three_functioning
+                )
+                return new_rn_list
+        else:
+            self.set_attr_self_and_below("functioning", False)
             return new_rn_list
 
     def simple_reallocation(self, m, k):
@@ -521,11 +531,13 @@ class QRAMRouter:
 
 
 class MonteCarloRouterInstances:
-    def __init__(self, n, eps, num_instances, rng_seed, filepath="tmp.h5py", instantiate_trees=True):
+    def __init__(self, n, eps, num_instances, rng_seed,
+                 top_three_functioning=False, filepath="tmp.h5py", instantiate_trees=True):
         self.n = n
         self.eps = eps
         self.num_instances = num_instances
         self.rng_seed = rng_seed
+        self.top_three_functioning = top_three_functioning
         self.filepath = filepath
         self._init_attrs = set(self.__dict__.keys())
         self.rng = np.random.default_rng(rng_seed)
@@ -568,10 +580,6 @@ class MonteCarloRouterInstances:
         together_together = np.array(together_together, dtype=bool)
         together_global = np.array(together_global, dtype=bool)
         num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
-        simple_repair_n1 = self.map_over_trees("simple_reallocation", self.n - 1, 0)
-        simple_repair_n2 = self.map_over_trees("simple_reallocation", self.n - 2, 0)
-        (_, n1_success) = list(zip(*simple_repair_n1))
-        (_, n2_success) = list(zip(*simple_repair_n2))
         data_dict = {
             "num_flags_bit_flip": num_flags_bit_flip,
             "num_flags_auction": num_flags_auction,
@@ -581,10 +589,17 @@ class MonteCarloRouterInstances:
             "together_auction": together_auction,
             "together_together": together_together,
             "together_global": together_global,
+            "runtime_bit_flip": time_1 - start_time,
+            "runtime_auction": time_2 - time_1,
+            "runtime_together": time_3 - time_2,
+            "runtime_global": time_4 - time_3,
             "num_faulty": num_faulty,
-            "n1_success": n1_success,
-            "n2_success": n2_success,
         }
+        for n in range(3, self.n):
+            simple_repair_n = self.map_over_trees("simple_reallocation", n, 0)
+            (_, n_success) = list(zip(*simple_repair_n))
+            print(n, len(np.argwhere(n_success)))
+            data_dict[f"n{n}_success"] = n_success
         print(f"writing results to {self.filepath}")
         write_to_h5(self.filepath, data_dict, self.param_dict())
         return 0
@@ -594,7 +609,9 @@ class MonteCarloRouterInstances:
 
     def _fab_instance_for_one_tree(self, tree_rn_list):
         tree, rn_list = tree_rn_list
-        _ = tree.fabrication_instance(self.eps, rn_list)
+        _ = tree.fabrication_instance(
+            self.eps, rn_list, top_three_functioning=self.top_three_functioning
+        )
         return tree
 
     def fab_instance_for_all_trees(self):

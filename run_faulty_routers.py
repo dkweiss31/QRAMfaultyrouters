@@ -14,7 +14,7 @@ if __name__ == "__main__":
     parser.add_argument("--eps", default=0.01, type=float, help="failure rate")
     parser.add_argument("--num_instances", default=100000, type=int, help="number monte carlo instances")
     parser.add_argument("--rng_seed", default=4674, type=int, help="rng seed")
-    parser.add_argument("--top_three_functioning", default=False, type=bool,
+    parser.add_argument("--top_three_functioning", default=0, type=int,
                         help="whether or not the top three routers should always be functioning")
     args = parser.parse_args()
     if args.idx == -1:

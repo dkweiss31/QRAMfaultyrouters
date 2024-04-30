@@ -15,6 +15,7 @@
 ################################## modify params here
 IDX=$SLURM_ARRAY_TASK_ID
 n=5
+top_three_functioning=1
 
 # num_eps * num_instance_scans should equal number of array jobs
 num_eps=20
@@ -34,4 +35,5 @@ python run_faulty_routers.py \
   --n=$n \
   --eps=$eps \
   --num_instances=$num_instances \
-  --rng_seed=$rng_seed
+  --rng_seed=$rng_seed \
+  --top_three_functioning=$top_three_functioning

@@ -104,6 +104,8 @@ class QRAMRouter:
                     failure_rate, rn_list=new_rn_list, k_level=k_level+1, top_three_functioning=top_three_functioning
                 )
                 return new_rn_list
+            else:
+                return new_rn_list
         else:
             self.set_attr_self_and_below("functioning", False)
             return new_rn_list

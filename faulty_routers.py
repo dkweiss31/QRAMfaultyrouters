@@ -1,6 +1,7 @@
 import copy
 import time
 from typing import Callable
+from functools import reduce
 
 import numpy as np
 from colorama import init as colorama_init
@@ -116,7 +117,7 @@ class QRAMRouter:
         returns the routers at the bottom of the tree that are part of the m-bit
         QRAM as well as a flag: 1 if it succeeded, 0 if it failed to find an m-bit QRAM
         """
-        num_avail = self.lowest_router_list_functioning_or_not(functioning=True)
+        num_avail = self.router_list_functioning_or_not(functioning=True)
         if len(num_avail) < 2**(m-2):
             return [], 0
 
@@ -128,8 +129,8 @@ class QRAMRouter:
             if m_depth - k_depth == 1:
                 existing_subtree.append(router.location)
                 return existing_subtree
-            right_avail_router_list = router.right_child.lowest_router_list_functioning_or_not(functioning=True)
-            left_avail_router_list = router.left_child.lowest_router_list_functioning_or_not(functioning=True)
+            right_avail_router_list = router.right_child.router_list_functioning_or_not(functioning=True)
+            left_avail_router_list = router.left_child.router_list_functioning_or_not(functioning=True)
             num_right = len(right_avail_router_list)
             num_left = len(left_avail_router_list)
             # can succesfully split this router as enough addresses available on each side
@@ -181,26 +182,29 @@ class QRAMRouter:
                 return (self.right_child.count_number_faulty_addresses()
                         + self.left_child.count_number_faulty_addresses())
 
-    def lowest_router_list_functioning_or_not(self, functioning=False, existing_router_list=None):
-        # TODO doesn't have to be at the bottom! Fix me!!
+    def router_list_functioning_or_not(self, functioning=False, existing_router_list=None, depth=None):
         """function that can compute a list of faulty routers and also functioning routers
         among those at the bottom of the tree. If functioning is set to False,
         this creates a list of all non-functioning routers. If functioning is set to
         true, then it creates a list of functioning routers."""
+        if depth is None:
+            depth = self.tree_depth() - 1
         if existing_router_list is None:
             existing_router_list = []
-        if self.right_child is None:
+        if depth < 0:
+            raise ValueError("depth should be zero or positive")
+        if depth == 0 or self.right_child is None:
             if self.functioning == functioning:
                 existing_router_list.append(self.location)
                 return existing_router_list
             else:
                 return existing_router_list
         else:
-            existing_router_list = self.right_child.lowest_router_list_functioning_or_not(
-                functioning=functioning, existing_router_list=existing_router_list
+            existing_router_list = self.right_child.router_list_functioning_or_not(
+                functioning=functioning, existing_router_list=existing_router_list, depth=depth-1
             )
-            existing_router_list = self.left_child.lowest_router_list_functioning_or_not(
-                functioning=functioning, existing_router_list=existing_router_list
+            existing_router_list = self.left_child.router_list_functioning_or_not(
+                functioning=functioning, existing_router_list=existing_router_list, depth=depth-1
             )
             return existing_router_list
 
@@ -235,7 +239,7 @@ class QRAMRouter:
         # I'm not on the bottom and I'm functioning. Possible subtree available here
         else:
             t_depth = self.tree_depth()
-            functioning_below = self.lowest_router_list_functioning_or_not(functioning=True)
+            functioning_below = self.router_list_functioning_or_not(functioning=True)
             if 2**(t_depth-1) == len(functioning_below):
                 routers_available_for_assignment += [functioning_below, ]
                 return routers_available_for_assignment
@@ -257,7 +261,7 @@ class QRAMRouter:
         # otherwise we aren't at the bottom.  If we have a faulty router
         # then everybody below wants to be reassigned together
         if not self.functioning:
-            routers_to_assign_together += [self.lowest_router_list_functioning_or_not(functioning=False), ]
+            routers_to_assign_together += [self.router_list_functioning_or_not(functioning=False), ]
             return routers_to_assign_together
         # If you're functioning, then continue with below routers
         else:
@@ -273,8 +277,8 @@ class QRAMRouter:
         original_tree, augmented_tree = self.assign_original_and_augmented()
         faulty_routers_repair_together = original_tree.collect_routers_to_assign_together()
         routers_available_together = augmented_tree.collect_routers_functioning_together()
-        all_faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
-        all_available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
+        all_faulty_router_list = original_tree.router_list_functioning_or_not(functioning=False)
+        all_available_router_list = augmented_tree.router_list_functioning_or_not(functioning=True)
         faulty_sizes = np.zeros(len(faulty_routers_repair_together))
         available_sizes = np.zeros(len(routers_available_together))
         for repair_idx, faulty_list in enumerate(faulty_routers_repair_together):
@@ -361,8 +365,8 @@ class QRAMRouter:
         t_depth = self.tree_depth()
         # each has depth t_depth-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
-        faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
-        available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
+        faulty_router_list = original_tree.router_list_functioning_or_not(functioning=False)
+        available_router_list = augmented_tree.router_list_functioning_or_not(functioning=True)
         num_faulty = len(faulty_router_list)
         if num_faulty == 0:
             # no repair necessary
@@ -522,8 +526,8 @@ class QRAMRouter:
 
     def verify_allocation(self, repair_dict):
         original_tree, augmented_tree = self.assign_original_and_augmented()
-        faulty_router_list = original_tree.lowest_router_list_functioning_or_not(functioning=False)
-        available_router_list = augmented_tree.lowest_router_list_functioning_or_not(functioning=True)
+        faulty_router_list = original_tree.router_list_functioning_or_not(functioning=False)
+        available_router_list = augmented_tree.router_list_functioning_or_not(functioning=True)
         # all routers assigned
         assert len(repair_dict.keys()) == len(faulty_router_list)
         # no repeated assignments

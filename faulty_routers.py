@@ -1,4 +1,3 @@
-import time
 from typing import Callable
 
 import numpy as np
@@ -46,12 +45,17 @@ class QRAMRouter:
             return QRAMRouter(current_location, left_child, right_child)
 
     def tree_depth(self):
+        """find the depth of a tree by traversing down the right children"""
         if self.right_child is None:
             return 1
         else:
             return self.right_child.tree_depth() + 1
 
     def print_tree(self, indent="", am_I_a_right_or_left_child="right", print_attr="location"):
+        """print a QRAM tree. This functionality is incredibly useful for visualizing the structure of a
+        given faulty tree instance. It plots in white all of the functioning routers, in red all of the
+        faulty routers and in blue all of the routers that were chosen as part of the simply-repaired subtree.
+        You can also choose to print any attribute of a QRAM tree, the default is the location"""
         if self.right_child:
             self.right_child.print_tree(indent + "     ", am_I_a_right_or_left_child="right", print_attr=print_attr)
         print(indent, end="")
@@ -72,6 +76,7 @@ class QRAMRouter:
             self.left_child.print_tree(indent + "     ", am_I_a_right_or_left_child="left", print_attr=print_attr)
 
     def set_attr_self_and_below(self, attr, val):
+        """set attribute attr of a given router to val. Do the same for all of its children"""
         setattr(self, attr, val)
         if self.right_child:
             self.right_child.set_attr_self_and_below(attr, val)
@@ -109,7 +114,7 @@ class QRAMRouter:
             self.set_attr_self_and_below("functioning", False)
             return new_rn_list
 
-    def simple_reallocation(self, m, k):
+    def simple_reallocation(self, m, k=1):
         """m is the depth of the QRAM we are after, and k is the level of the QRAM this
         router should be acting as
         returns the routers at the bottom of the tree that are part of the m-bit
@@ -124,7 +129,7 @@ class QRAMRouter:
                 existing_subtree = []
             router.part_of_subtree = True
             # we've reached the bottom
-            if m_depth - k_depth == 1:
+            if m_depth == k_depth:
                 existing_subtree.append(router.location)
                 return existing_subtree
             right_avail_router_list = router.right_child.router_list_functioning_or_not(functioning=True)
@@ -132,7 +137,7 @@ class QRAMRouter:
             num_right = len(right_avail_router_list)
             num_left = len(left_avail_router_list)
             # can succesfully split this router as enough addresses available on each side
-            if num_right >= 2**(m_depth-k_depth-2) and num_left >= 2**(m_depth-k_depth-2):
+            if num_right >= 2**(m_depth-k_depth-1) and num_left >= 2**(m_depth-k_depth-1):
                 # try splitting this router. If we fail later on, we return here and enter the if
                 # statements below
                 try:
@@ -148,13 +153,13 @@ class QRAMRouter:
                     router.set_attr_self_and_below("part_of_subtree", False)
                     pass
             # check if right or left child router can serve as a level k router
-            if num_right >= 2**(m_depth - k_depth - 1):
+            if num_right >= 2**(m_depth - k_depth):
                 router.part_of_subtree = True
                 existing_subtree = _simple_reallocation(
                     m_depth, k_depth, router.right_child, existing_subtree=existing_subtree
                 )
                 return existing_subtree
-            if num_left >= 2**(m_depth - k_depth - 1):
+            if num_left >= 2**(m_depth - k_depth):
                 router.part_of_subtree = True
                 existing_subtree = _simple_reallocation(
                     m_depth, k_depth, router.left_child, existing_subtree=existing_subtree
@@ -274,13 +279,24 @@ class QRAMRouter:
             inter_repair_dict = self.router_repair_global(faulty_router_list, available_router_list)
         return inter_repair_dict, free_repair_dict
 
-    def repair_as_you_go(self):
+    def repair_as_you_go(self, start="two"):
+        """start can either be 'two' or 'simple_success'. Question is do we start with an n=2 bit QRAM
+         or do we start with the largest possible simple-repair QRAM"""
+        largest_simple_repair = 2
+        if start == "simple_success":
+            # go up to n-2 only, don't want simple repair to steal the show
+            for tree_depth in range(2, self.tree_depth() - 1):
+                _, simple_success = self.simple_reallocation(tree_depth, 1)
+                if simple_success:
+                    largest_simple_repair = tree_depth
+                else:
+                    break
         original_tree, augmented_tree = self.assign_original_and_augmented()
         full_depth = self.tree_depth()
-        repair_dict_2, _ = self._repair_as_you_go(2, original_tree, augmented_tree, {})
-        repair_dict_list = [repair_dict_2, ]
+        repair_dict_init, _ = self._repair_as_you_go(largest_simple_repair, original_tree, augmented_tree, {})
+        repair_dict_list = [repair_dict_init, ]
         free_repair_dict_list = [{}, ]
-        for inter_depth in range(3, full_depth - 1):
+        for inter_depth in range(largest_simple_repair + 1, full_depth - 1):
             prev_repair_dict = repair_dict_list[-1] | free_repair_dict_list[-1]
             new_repair_dict, free_repair_dict = self._repair_as_you_go(
                 inter_depth, original_tree, augmented_tree, prev_repair_dict
@@ -324,7 +340,7 @@ class QRAMRouter:
                             break
         return final_repair_dict
 
-    def router_repair(self, method="global"):
+    def router_repair(self, method, **kwargs):
         """method can be 'global' or 'as_you_go' """
         t_depth = self.tree_depth()
         # each has depth t_depth-1
@@ -346,7 +362,8 @@ class QRAMRouter:
             flag_qubits = set(self.compute_flag_qubits(repair_dict_or_list))
             return repair_dict_or_list, len(flag_qubits)
         elif method == "as_you_go":
-            repair_dict_or_list, free_repair_dict_list = self.repair_as_you_go()
+            start = kwargs.get("start", "two")
+            repair_dict_or_list, free_repair_dict_list = self.repair_as_you_go(start=start)
             repair_dicts = [repair_dict | free_repair_dict for repair_dict, free_repair_dict
                             in zip(repair_dict_or_list, free_repair_dict_list)]
             final_repair = self.construct_as_you_go_mapping(repair_dicts, faulty_router_list)
@@ -518,9 +535,11 @@ if __name__ == "__main__":
 
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)
+    _, simple_flag = FULLTREE.simple_reallocation(TREE_DEPTH)
     FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[27], top_three_functioning=True)  # half full n=6 #255
     FULLTREE.print_tree()
     assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
     _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
+    _final_repair_simple, _flag_qubits_simple = FULLTREE.router_repair(method="as_you_go", start="simple_success")
     total_global = FULLTREE.total_flag_cost(assignment_global)
     print(0)

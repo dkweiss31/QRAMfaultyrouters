@@ -1,3 +1,4 @@
+import copy
 from typing import Callable
 
 import numpy as np
@@ -191,12 +192,12 @@ class QRAMRouter:
         this creates a list of all non-functioning routers. If functioning is set to
         true, then it creates a list of functioning routers."""
         if depth is None:
-            depth = self.tree_depth() - 1
+            depth = self.tree_depth()
         if existing_router_list is None:
             existing_router_list = []
-        if depth < 0:
-            raise ValueError("depth should be zero or positive")
-        if depth == 0 or self.right_child is None:
+        if depth < 1:
+            raise ValueError("depth should be greater than or equal to 1")
+        if depth == 1 or self.right_child is None:
             if self.functioning == functioning:
                 existing_router_list.append(self.location)
                 return existing_router_list
@@ -239,47 +240,52 @@ class QRAMRouter:
         inter_depth,
         original_tree,
         augmented_tree,
-        prev_repair_dict,
+        prev_overall_mapping_dict,
     ):
+        new_overall_mapping_dict = {}
+        routers_needing_reassignment = []
         faulty_router_list = original_tree.router_list_functioning_or_not(
             functioning=False, depth=inter_depth
         )
+        original_faulty_router_list = copy.deepcopy(faulty_router_list)
         available_router_list = augmented_tree.router_list_functioning_or_not(
             functioning=True, depth=inter_depth
         )
-        prev_repaired_routers = prev_repair_dict.keys()
 
-        def _pop_and_queue_for_repair_if_necessary(prev_repaired_router_child):
-            # child_router could be a child on the augmented side,
-            # hence not in faulty_router_list. Want to delete children of
-            # previously repaired routers from faulty router list
-            # (tracking their mapped friends on the augmented side)
-            if prev_repaired_router_child in faulty_router_list:
-                child_index = faulty_router_list.index(prev_repaired_router_child)
-                faulty_router_list.pop(child_index)
-            prev_reassigned_router = prev_repair_dict[prev_repaired_router_child[:-1]]
-            # new reassigned router at the next depth is right or left child
-            new_reassigned_router = prev_reassigned_router + prev_repaired_router_child[-1]
-            # check if this router is dead or alive and add to faulty list if not
-            if new_reassigned_router not in available_router_list:
-                # TODO lose info here about which faulty router originally was assigned here?
-                # in principle trackable though from previous repair dicts...
-                faulty_router_list.append(new_reassigned_router)
-            else:
-                avail_index = available_router_list.index(new_reassigned_router)
-                available_router_list.pop(avail_index)
-                free_repair_dict[prev_repaired_router_child] = new_reassigned_router
-
-        free_repair_dict = {}
-        for prev_repaired_router in prev_repaired_routers:
-            _pop_and_queue_for_repair_if_necessary(prev_repaired_router + "0")
-            _pop_and_queue_for_repair_if_necessary(prev_repaired_router + "1")
+        for (prev_repaired_router, prev_available_router) in prev_overall_mapping_dict.items():
+            for idx in ["0", "1"]:
+                # pop prev repaired faulty routers from the list, since its their
+                # mapped friends who might need repair plus new guys at the lowest level
+                child_idx = faulty_router_list.index(prev_repaired_router + idx)
+                faulty_router_list.pop(child_idx)
+                if prev_available_router + idx not in available_router_list:
+                    # router is newly unavailable at this level of the tree.
+                    # needs reassignment and tracking of where it got mapped from
+                    routers_needing_reassignment.append(prev_repaired_router + idx)
+                    faulty_router_list.append(prev_available_router + idx)
+                else:
+                    # router is still available, get reassignment for free
+                    avail_index = available_router_list.index(prev_available_router + idx)
+                    available_router_list.pop(avail_index)
+                    new_overall_mapping_dict[prev_repaired_router + idx] = prev_available_router + idx
 
         if len(faulty_router_list) == 0:
             inter_repair_dict = {}
         else:
             inter_repair_dict = self.router_repair_global(faulty_router_list, available_router_list)
-        return inter_repair_dict, free_repair_dict
+
+        # had to wait until we ran the global algorithm to see where these faulty
+        # augmented routers got assigned
+        for purgatory_router in routers_needing_reassignment:
+            prev_available_router = prev_overall_mapping_dict[purgatory_router[0: -1]]
+            repaired_router = prev_available_router + purgatory_router[-1]
+            new_overall_mapping_dict[purgatory_router] = inter_repair_dict[repaired_router]
+
+        # for newly faulty routers on the original side of the tree, add them to the mapping
+        for newly_faulty_router in inter_repair_dict.keys():
+            if newly_faulty_router in original_faulty_router_list:
+                new_overall_mapping_dict[newly_faulty_router] = inter_repair_dict[newly_faulty_router]
+        return inter_repair_dict, new_overall_mapping_dict
 
     def repair_as_you_go(self, start="two"):
         """start can either be 'two' or 'simple_success'. Question is do we start with an n=2 bit QRAM
@@ -295,53 +301,21 @@ class QRAMRouter:
                     break
         original_tree, augmented_tree = self.assign_original_and_augmented()
         full_depth = self.tree_depth()
-        # TODO this wants to be largest_simple_repair + 1
-        repair_dict_init, _ = self._repair_as_you_go(largest_simple_repair, original_tree, augmented_tree, {})
+        repair_dict_init, _ = self._repair_as_you_go(largest_simple_repair + 1, original_tree, augmented_tree, {})
         repair_dict_list = [repair_dict_init, ]
-        free_repair_dict_list = [{}, ]
-        for inter_depth in range(largest_simple_repair + 1, full_depth - 1):
-            prev_repair_dict = repair_dict_list[-1] | free_repair_dict_list[-1]
-            new_repair_dict, free_repair_dict = self._repair_as_you_go(
-                inter_depth, original_tree, augmented_tree, prev_repair_dict
+        overall_mapping_dict = copy.deepcopy(repair_dict_init)
+        for inter_depth in range(largest_simple_repair + 2, full_depth):
+            new_repair_dict, overall_mapping_dict = self._repair_as_you_go(
+                inter_depth, original_tree, augmented_tree, overall_mapping_dict
             )
             repair_dict_list.append(new_repair_dict)
-            free_repair_dict_list.append(free_repair_dict)
-        return repair_dict_list, free_repair_dict_list
+        return repair_dict_list, overall_mapping_dict
 
     @staticmethod
     @np.vectorize
     def bit_flip_pattern_int(faulty_address, repair_address):
         """returns the number of bit flips required to map faulty to repair"""
         return int(faulty_address, 2) ^ int(repair_address, 2)
-
-    @staticmethod
-    def construct_as_you_go_mapping(repair_dict_list, faulty_router_list):
-        final_repair_dict = {}
-        reordered_repair_dict_list = repair_dict_list[::-1]
-        last_repair = reordered_repair_dict_list[0]
-        # this will be 0 or 1 depending on which side of the tree is "original"
-        which_side = faulty_router_list[0][2]
-
-        for faulty_router in last_repair.keys():
-            if faulty_router in faulty_router_list:
-                final_repair_dict[faulty_router] = last_repair[faulty_router]
-            else:
-                prev_faulty_router = faulty_router
-                address_append = ""
-                for k_idx, k_router_dict in enumerate(reordered_repair_dict_list[1:]):
-                    # we've gone up a level, so strip off the last address
-                    k_faulty_router = prev_faulty_router[0: -1]
-                    # this address is more significant than all previous
-                    address_append = prev_faulty_router[-1] + address_append
-                    # k_faulty_router in k_router_dict indicates a free repair, we just strip
-                    # the least significant bit (above) and move on
-                    if k_faulty_router not in k_router_dict:
-                        prev_router_dict_flipped = {val: key for key, val in k_router_dict.items()}
-                        prev_faulty_router = prev_router_dict_flipped[k_faulty_router]
-                        if prev_faulty_router[2] == which_side:
-                            final_repair_dict[prev_faulty_router + address_append] = last_repair[faulty_router]
-                            break
-        return final_repair_dict
 
     def router_repair(self, method, **kwargs):
         """method can be 'global' or 'as_you_go' """
@@ -366,13 +340,10 @@ class QRAMRouter:
             return repair_dict_or_list, len(flag_qubits)
         elif method == "as_you_go":
             start = kwargs.get("start", "two")
-            repair_dict_or_list, free_repair_dict_list = self.repair_as_you_go(start=start)
-            repair_dicts = [repair_dict | free_repair_dict for repair_dict, free_repair_dict
-                            in zip(repair_dict_or_list, free_repair_dict_list)]
-            final_repair = self.construct_as_you_go_mapping(repair_dicts, faulty_router_list)
-            self.verify_allocation(final_repair)
+            repair_dict_or_list, overall_mapping_dict = self.repair_as_you_go(start=start)
+            self.verify_allocation(overall_mapping_dict)
             flag_qubits = [len(set(self.compute_flag_qubits(repair_dict))) for repair_dict in repair_dict_or_list]
-            return final_repair, sum(flag_qubits)
+            return overall_mapping_dict, sum(flag_qubits)
         else:
             raise RuntimeError("method not supported")
 
@@ -527,8 +498,8 @@ class SimpleReallocationFailure(Exception):
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    TREE_DEPTH = 6
-    EPS = 0.06  # 0.375
+    TREE_DEPTH = 12
+    EPS = 0.03  # 0.375
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
@@ -538,14 +509,14 @@ if __name__ == "__main__":
     RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
 
     for tree_idx in range(53, NUM_INSTANCES):
-        print(tree_idx)
         MYTREE = QRAMRouter()
         FULLTREE = MYTREE.create_tree(TREE_DEPTH)
         FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[tree_idx], top_three_functioning=True)
-        FULLTREE.print_tree()
+        # FULLTREE.print_tree()
         assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
         _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
         _final_repair_simple, _flag_qubits_simple = FULLTREE.router_repair(method="as_you_go", start="simple_success")
+        print(tree_idx, _flag_qubits_simple, flag_qubits_global, _flag_qubits)
         total_global = FULLTREE.total_flag_cost(assignment_global)
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)

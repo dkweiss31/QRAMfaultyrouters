@@ -249,15 +249,17 @@ class QRAMRouter:
         )
         prev_repaired_routers = prev_repair_dict.keys()
 
-        def _pop_and_queue_for_repair_if_necessary(child_router):
+        def _pop_and_queue_for_repair_if_necessary(prev_repaired_router_child):
             # child_router could be a child on the augmented side,
-            # hence not in faulty_router_list
-            if child_router in faulty_router_list:
-                child_index = faulty_router_list.index(child_router)
+            # hence not in faulty_router_list. Want to delete children of
+            # previously repaired routers from faulty router list
+            # (tracking their mapped friends on the augmented side)
+            if prev_repaired_router_child in faulty_router_list:
+                child_index = faulty_router_list.index(prev_repaired_router_child)
                 faulty_router_list.pop(child_index)
-            prev_reassigned_router = prev_repair_dict[child_router[:-1]]
+            prev_reassigned_router = prev_repair_dict[prev_repaired_router_child[:-1]]
             # new reassigned router at the next depth is right or left child
-            new_reassigned_router = prev_reassigned_router + child_router[-1]
+            new_reassigned_router = prev_reassigned_router + prev_repaired_router_child[-1]
             # check if this router is dead or alive and add to faulty list if not
             if new_reassigned_router not in available_router_list:
                 # TODO lose info here about which faulty router originally was assigned here?
@@ -266,7 +268,7 @@ class QRAMRouter:
             else:
                 avail_index = available_router_list.index(new_reassigned_router)
                 available_router_list.pop(avail_index)
-                free_repair_dict[child_router] = new_reassigned_router
+                free_repair_dict[prev_repaired_router_child] = new_reassigned_router
 
         free_repair_dict = {}
         for prev_repaired_router in prev_repaired_routers:
@@ -286,13 +288,14 @@ class QRAMRouter:
         if start == "simple_success":
             # go up to n-2 only, don't want simple repair to steal the show
             for tree_depth in range(2, self.tree_depth() - 1):
-                _, simple_success = self.simple_reallocation(tree_depth, 1)
+                _, simple_success = self.simple_reallocation(tree_depth)
                 if simple_success:
                     largest_simple_repair = tree_depth
                 else:
                     break
         original_tree, augmented_tree = self.assign_original_and_augmented()
         full_depth = self.tree_depth()
+        # TODO this wants to be largest_simple_repair + 1
         repair_dict_init, _ = self._repair_as_you_go(largest_simple_repair, original_tree, augmented_tree, {})
         repair_dict_list = [repair_dict_init, ]
         free_repair_dict_list = [{}, ]
@@ -443,19 +446,20 @@ class MonteCarloRouterInstances:
         print("running faulty QRAM simulation")
         self.fab_instance_for_all_trees()
         repaired_routers_global = self.map_over_trees("router_repair", "global")
-        _, num_flags_global, together_global = list(zip(*repaired_routers_global))
+        repaired_routers_as_you_go = self.map_over_trees("router_repair", "as_you_go", start="simple_success")
+        _, num_flags_global = list(zip(*repaired_routers_global))
+        _, num_flags_as_you_go = list(zip(*repaired_routers_as_you_go))
         num_flags_global = np.array(num_flags_global, dtype=float)
-        together_global = np.array(together_global, dtype=bool)
+        num_flags_as_you_go = np.array(num_flags_as_you_go, dtype=float)
         num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
         data_dict = {
             "num_flags_global": num_flags_global,
-            "together_global": together_global,
+            "num_flags_as_you_go": num_flags_as_you_go,
             "num_faulty": num_faulty,
         }
-        for n in range(3, self.n):
-            simple_repair_n = self.map_over_trees("simple_reallocation", n, 0)
+        for n in range(3, self.n + 1):
+            simple_repair_n = self.map_over_trees("simple_reallocation", n)
             (_, n_success) = list(zip(*simple_repair_n))
-            print(n, len(np.argwhere(n_success)))
             data_dict[f"n{n}_success"] = n_success
         print(f"writing results to {self.filepath}")
         write_to_h5(self.filepath, data_dict, self.param_dict())
@@ -476,13 +480,13 @@ class MonteCarloRouterInstances:
             self.trees = self.create_trees()
         self.trees = list(map(self._fab_instance_for_one_tree, zip(self.trees, self.rn_list)))
 
-    def map_over_trees(self, func, *args):
+    def map_over_trees(self, func, *args, **kwargs):
         if self.trees is None:
             self.trees = self.create_trees()
         if type(func) is str:
-            return list(map(lambda tree: getattr(tree, func)(*args), self.trees))
+            return list(map(lambda tree: getattr(tree, func)(*args, **kwargs), self.trees))
         elif type(func) is Callable:  # assume its a function that takes a single tree as argument
-            return list(map(lambda tree: func(tree, *args), self.trees))
+            return list(map(lambda tree: func(tree, *args, **kwargs), self.trees))
         else:
             raise ValueError("func needs to be a string or a callable")
 
@@ -523,8 +527,8 @@ class SimpleReallocationFailure(Exception):
 
 if __name__ == "__main__":
     NUM_INSTANCES = 10000
-    TREE_DEPTH = 8
-    EPS = 0.1  # 0.375
+    TREE_DEPTH = 6
+    EPS = 0.06  # 0.375
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
@@ -533,11 +537,20 @@ if __name__ == "__main__":
     rng = np.random.default_rng(RNG_SEED)  # 27585353
     RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
 
+    for tree_idx in range(53, NUM_INSTANCES):
+        print(tree_idx)
+        MYTREE = QRAMRouter()
+        FULLTREE = MYTREE.create_tree(TREE_DEPTH)
+        FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[tree_idx], top_three_functioning=True)
+        FULLTREE.print_tree()
+        assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
+        _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
+        _final_repair_simple, _flag_qubits_simple = FULLTREE.router_repair(method="as_you_go", start="simple_success")
+        total_global = FULLTREE.total_flag_cost(assignment_global)
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)
     _, simple_flag = FULLTREE.simple_reallocation(TREE_DEPTH)
     FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[27], top_three_functioning=True)  # half full n=6 #255
-    FULLTREE.print_tree()
     assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
     _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
     _final_repair_simple, _flag_qubits_simple = FULLTREE.router_repair(method="as_you_go", start="simple_success")

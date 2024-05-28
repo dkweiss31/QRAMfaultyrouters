@@ -10,11 +10,11 @@ from faulty_routers import MonteCarloRouterInstances
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="run monte carlo instances of faulty routers")
     parser.add_argument("--idx", default=-1, type=int, help="idx to scan over")
-    parser.add_argument("--n", default=8, type=int, help="tree depth")
+    parser.add_argument("--n", default=3, type=int, help="tree depth")
     parser.add_argument("--eps", default=0.01, type=float, help="failure rate")
     parser.add_argument("--num_instances", default=100000, type=int, help="number monte carlo instances")
     parser.add_argument("--rng_seed", default=4674, type=int, help="rng seed")
-    parser.add_argument("--top_three_functioning", default=0, type=int,
+    parser.add_argument("--top_three_functioning", default=1, type=int,
                         help="whether or not the top three routers should always be functioning")
     args = parser.parse_args()
     if args.idx == -1:
@@ -29,7 +29,7 @@ if __name__ == "__main__":
         args.n,
         args.eps,
         args.num_instances,
-        args.rng_seed,
+        args.rng_seed * args.n + 267483,
         args.top_three_functioning,
         filepath=filename,
     )

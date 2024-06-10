@@ -5,7 +5,7 @@ import numpy as np
 from colorama import init as colorama_init
 from colorama import Fore, Style
 
-from quantum_utils import write_to_h5
+from quantum_utils import write_to_h5, param_map, unpack_param_map
 
 colorama_init()
 
@@ -394,18 +394,20 @@ class QRAMRouter:
 
 class MonteCarloRouterInstances:
     def __init__(self, n, eps, num_instances, rng_seed,
-                 top_three_functioning=False, filepath="tmp.h5py", instantiate_trees=True):
+                 top_three_functioning=False, filepath="tmp.h5py",
+                 memory_efficient=False,
+                 ):
         self.n = n
         self.eps = eps
         self.num_instances = num_instances
         self.rng_seed = rng_seed
         self.top_three_functioning = top_three_functioning
         self.filepath = filepath
+        self.memory_efficient = memory_efficient
         self._init_attrs = set(self.__dict__.keys())
         self.rng = np.random.default_rng(rng_seed)
         self.rn_list = self.rng.random((num_instances, 2 ** n))
-        self.instantiate_trees = instantiate_trees
-        if instantiate_trees:
+        if not self.memory_efficient:
             self.trees = self.create_trees()
         else:
             self.trees = None
@@ -413,28 +415,57 @@ class MonteCarloRouterInstances:
     def param_dict(self):
         return {k: v for k, v in self.__dict__.items() if k in self._init_attrs}
 
+    def run_for_one_tree(self, idx):
+        rn_list = self.rn_list[idx]
+        tree = QRAMRouter().create_tree(self.n)
+        tree.fabrication_instance(
+            self.eps, rn_list, top_three_functioning=self.top_three_functioning
+        )
+        _, num_flags_global = tree.router_repair(method="global")
+        _, num_flags_as_you_go = tree.router_repair(method="as_you_go", start="simple_success")
+        num_faulty = tree.count_number_faulty_addresses()
+        simple_success = []
+        for n in range(3, self.n + 1):
+            _, n_success = tree.simple_reallocation(n)
+            simple_success.append(int(n_success))
+        return np.concatenate(
+            ([num_flags_global, num_flags_as_you_go, num_faulty], simple_success)
+        )
+
     def run(self):
         print("running faulty QRAM simulation")
-        self.fab_instance_for_all_trees()
-        repaired_routers_global = self.map_over_trees("router_repair", "global")
-        repaired_routers_as_you_go = self.map_over_trees("router_repair", "as_you_go", start="simple_success")
-        _, num_flags_global = list(zip(*repaired_routers_global))
-        _, num_flags_as_you_go = list(zip(*repaired_routers_as_you_go))
-        num_flags_global = np.array(num_flags_global, dtype=float)
-        num_flags_as_you_go = np.array(num_flags_as_you_go, dtype=float)
-        num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
+        if not self.memory_efficient:
+            self.fab_instance_for_all_trees()
+            repaired_routers_global = self.map_over_trees("router_repair", "global")
+            repaired_routers_as_you_go = self.map_over_trees("router_repair", "as_you_go", start="simple_success")
+            _, num_flags_global = list(zip(*repaired_routers_global))
+            _, num_flags_as_you_go = list(zip(*repaired_routers_as_you_go))
+            num_flags_global = np.array(num_flags_global, dtype=float)
+            num_flags_as_you_go = np.array(num_flags_as_you_go, dtype=float)
+            num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
+            n_n_success = np.empty((self.num_instances, self.n - 2))
+            for idx, n in enumerate(range(3, self.n + 1)):
+                simple_repair_n = self.map_over_trees("simple_reallocation", n)
+                (_, n_success) = list(zip(*simple_repair_n))
+                n_n_success[:, idx] = n_success
+        else:
+            result = unpack_param_map(param_map(
+                self.run_for_one_tree, [np.arange(self.num_instances), ]
+            )).astype(float)
+            num_flags_global = result[..., 0]
+            num_flags_as_you_go = result[..., 1]
+            num_faulty = result[..., 2]
+            n_n_success = result[..., 3:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
             "num_faulty": num_faulty,
         }
-        for n in range(3, self.n + 1):
-            simple_repair_n = self.map_over_trees("simple_reallocation", n)
-            (_, n_success) = list(zip(*simple_repair_n))
-            data_dict[f"n{n}_success"] = n_success
+        for idx, n in enumerate(range(3, self.n + 1)):
+            data_dict[f"n{n}_success"] = n_n_success[..., idx]
         print(f"writing results to {self.filepath}")
         write_to_h5(self.filepath, data_dict, self.param_dict())
-        return 0
+        return data_dict
 
     def create_trees(self):
         return list(map(lambda _: QRAMRouter().create_tree(self.n), range(self.num_instances)))
@@ -497,14 +528,17 @@ class SimpleReallocationFailure(Exception):
 
 
 if __name__ == "__main__":
-    NUM_INSTANCES = 10000
-    TREE_DEPTH = 12
+    NUM_INSTANCES = 1000
+    TREE_DEPTH = 7
     EPS = 0.03  # 0.375
+    RNG_SEED = 2545672423485  # 254567242348543
+    mc_inst = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, rng_seed=RNG_SEED, memory_efficient=True)
+    mc_inst.run()
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
     # tree_Depth = 10, eps = 0.05 rng 2543567243234588543 2770 below
-    RNG_SEED = 2545672423485  # 254567242348543
+
     rng = np.random.default_rng(RNG_SEED)  # 27585353
     RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
 

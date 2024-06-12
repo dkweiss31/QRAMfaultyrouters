@@ -11,32 +11,22 @@ from faulty_routers import MonteCarloRouterInstances, QRAMRouter
 def test_memory_efficient(n, eps, top_three_functioning):
     num_instances = 1000
     rng_seed = 2545685
-    filepath_true = "tmp_true.h5py"
-    filepath_false = "tmp_false.h5py"
-
-    mc_false = MonteCarloRouterInstances(
-        n, eps, num_instances, rng_seed, top_three_functioning, filepath_false, memory_efficient=False
+    filepath = "tmp.h5py"
+    mc = MonteCarloRouterInstances(
+        n, eps, num_instances, rng_seed, top_three_functioning, filepath,
     )
-    mc_true = MonteCarloRouterInstances(
-        n, eps, num_instances, rng_seed, top_three_functioning, filepath_true, memory_efficient=True
-    )
-
-    result_false = mc_false.run()
-    result_true = mc_true.run()
-    os.remove(filepath_true)
-    os.remove(filepath_false)
-    for val_true, val_false in zip(result_true.values(), result_false.values()):
-        assert np.allclose(val_true, val_false)
+    result = mc.run()
+    os.remove(filepath)
 
 
 @pytest.mark.parametrize("n", [5, 6, 7])
 @pytest.mark.parametrize("eps", [0.02, 0.08])
 @pytest.mark.parametrize("top_three_functioning", [True, False])
 def test_fabrication_instance(n, eps, top_three_functioning):
-    num_instances = 10000
+    num_instances = 20000
     rng_seed = 2545685 * n
     rng = np.random.default_rng(rng_seed)
-    top_faulty_counter = 0
+    rando_faulty_counter = 0
     for instance in range(num_instances):
         tree = QRAMRouter()
         full_tree = tree.create_tree(n)
@@ -47,8 +37,10 @@ def test_fabrication_instance(n, eps, top_three_functioning):
         if top_three_functioning:
             assert full_tree.functioning
             assert full_tree.right_child.functioning and full_tree.left_child.functioning
-        else:
-            if not full_tree.functioning:
-                top_faulty_counter += 1
+        if not full_tree.right_child.left_child.left_child.functioning:
+            rando_faulty_counter += 1
     if not top_three_functioning:
-        assert eps - 0.01 < top_faulty_counter / num_instances < eps + 0.01
+        ideal_eps = eps + (1 - eps) * eps + (1 - eps)**2 * eps + (1 - eps)**3 * eps
+    else:
+        ideal_eps = eps + (1 - eps) * eps
+    assert ideal_eps - 0.01 < rando_faulty_counter / num_instances < ideal_eps + 0.01

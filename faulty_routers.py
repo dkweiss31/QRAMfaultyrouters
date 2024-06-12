@@ -1,6 +1,4 @@
 import copy
-from functools import partial
-from typing import Callable
 
 import numpy as np
 from colorama import init as colorama_init
@@ -393,7 +391,6 @@ class QRAMRouter:
 class MonteCarloRouterInstances:
     def __init__(self, n, eps, num_instances, rng_seed,
                  top_three_functioning=False, filepath="tmp.h5py",
-                 memory_efficient=False,
                  ):
         self.n = n
         self.eps = eps
@@ -401,12 +398,7 @@ class MonteCarloRouterInstances:
         self.rng_seed = rng_seed
         self.top_three_functioning = top_three_functioning
         self.filepath = filepath
-        self.memory_efficient = memory_efficient
         self._init_attrs = set(self.__dict__.keys())
-        if not self.memory_efficient:
-            self.trees = self.create_trees()
-        else:
-            self.trees = None
 
     def param_dict(self):
         return {k: v for k, v in self.__dict__.items() if k in self._init_attrs}
@@ -429,32 +421,17 @@ class MonteCarloRouterInstances:
         )
 
     def run(self):
-        print("running faulty QRAM simulation")
-        if not self.memory_efficient:
-            self.fab_instance_for_all_trees()
-            repaired_routers_global = self.map_over_trees("router_repair", "global")
-            repaired_routers_as_you_go = self.map_over_trees("router_repair", "as_you_go", start="simple_success")
-            _, num_flags_global = list(zip(*repaired_routers_global))
-            _, num_flags_as_you_go = list(zip(*repaired_routers_as_you_go))
-            num_flags_global = np.array(num_flags_global, dtype=float)
-            num_flags_as_you_go = np.array(num_flags_as_you_go, dtype=float)
-            num_faulty = np.array(self.map_over_trees("count_number_faulty_addresses"))
-            n_n_success = np.empty((self.num_instances, self.n - 2))
-            for idx, n in enumerate(range(3, self.n + 1)):
-                simple_repair_n = self.map_over_trees("simple_reallocation", n)
-                (_, n_success) = list(zip(*simple_repair_n))
-                n_n_success[:, idx] = n_success
-        else:
-            parent_rng = np.random.default_rng(self.rng_seed)
-            streams = parent_rng.spawn(self.num_instances)
-            idxs_and_streams = list(zip(np.arange(self.num_instances), streams))
-            result = unpack_param_map(param_map(
-                self.run_for_one_tree, [idxs_and_streams, ]
-            )).astype(float)
-            num_flags_global = result[..., 0]
-            num_flags_as_you_go = result[..., 1]
-            num_faulty = result[..., 2]
-            n_n_success = result[..., 3:]
+        print(f"running faulty QRAM simulation with {self._init_attrs}")
+        parent_rng = np.random.default_rng(self.rng_seed)
+        streams = parent_rng.spawn(self.num_instances)
+        idxs_and_streams = list(zip(np.arange(self.num_instances), streams))
+        result = unpack_param_map(param_map(
+            self.run_for_one_tree, [idxs_and_streams, ]
+        )).astype(float)
+        num_flags_global = result[..., 0]
+        num_flags_as_you_go = result[..., 1]
+        num_faulty = result[..., 2]
+        n_n_success = result[..., 3:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
@@ -465,34 +442,6 @@ class MonteCarloRouterInstances:
         print(f"writing results to {self.filepath}")
         write_to_h5(self.filepath, data_dict, self.param_dict())
         return data_dict
-
-    def create_trees(self):
-        return list(map(lambda _: QRAMRouter().create_tree(self.n), range(self.num_instances)))
-
-    def _fab_instance_for_one_tree(self, tree_and_rng):
-        tree, rng = tree_and_rng
-        _ = tree.fabrication_instance(
-            self.eps, rng, top_three_functioning=self.top_three_functioning
-        )
-        return tree
-
-    def fab_instance_for_all_trees(self):
-        if self.trees is None:
-            self.trees = self.create_trees()
-        parent_rng = np.random.default_rng(self.rng_seed)
-        streams = parent_rng.spawn(self.num_instances)
-        trees_and_streams = list(zip(self.trees, streams))
-        self.trees = list(map(self._fab_instance_for_one_tree, trees_and_streams))
-
-    def map_over_trees(self, func, *args, **kwargs):
-        if self.trees is None:
-            self.trees = self.create_trees()
-        if type(func) is str:
-            return list(map(lambda tree: getattr(tree, func)(*args, **kwargs), self.trees))
-        elif type(func) is Callable:  # assume its a function that takes a single tree as argument
-            return list(map(lambda tree: func(tree, *args, **kwargs), self.trees))
-        else:
-            raise ValueError("func needs to be a string or a callable")
 
 
 class AnalyticUnrepair:
@@ -534,7 +483,7 @@ if __name__ == "__main__":
     TREE_DEPTH = 7
     EPS = 0.03  # 0.375
     RNG_SEED = 2545672423485  # 254567242348543
-    mc_inst = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, rng_seed=RNG_SEED, memory_efficient=False)
+    mc_inst = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, rng_seed=RNG_SEED)
     mc_inst.run()
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2

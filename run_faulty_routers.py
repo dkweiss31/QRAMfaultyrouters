@@ -16,6 +16,8 @@ if __name__ == "__main__":
     parser.add_argument("--rng_seed", default=4674, type=int, help="rng seed")
     parser.add_argument("--top_three_functioning", default=1, type=int,
                         help="whether or not the top three routers should always be functioning")
+    parser.add_argument("--memory_efficient", default=1, type=int,
+                        help="whether or not to run the simulation in a memory efficient way")
     args = parser.parse_args()
     if args.idx == -1:
         file_str = f"faulty_routers_n_{args.n}_eps_{args.eps}" \
@@ -28,9 +30,10 @@ if __name__ == "__main__":
     mcinstance = MonteCarloRouterInstances(
         args.n,
         args.eps,
-        args.num_instances,
-        args.rng_seed * args.n + 267483,
-        args.top_three_functioning,
+        num_instances=args.num_instances,
+        rng_seed=args.rng_seed * args.n + 267483,
+        top_three_functioning=args.top_three_functioning,
+        memory_efficient=args.memory_efficient,
         filepath=filename,
     )
     mcinstance.run()

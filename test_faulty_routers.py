@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import pytest
-from faulty_routers import MonteCarloRouterInstances
+from faulty_routers import MonteCarloRouterInstances, QRAMRouter
 
 
 @pytest.mark.parametrize("n", [5, 6, 7])
@@ -27,3 +27,28 @@ def test_memory_efficient(n, eps, top_three_functioning):
     os.remove(filepath_false)
     for val_true, val_false in zip(result_true.values(), result_false.values()):
         assert np.allclose(val_true, val_false)
+
+
+@pytest.mark.parametrize("n", [5, 6, 7])
+@pytest.mark.parametrize("eps", [0.02, 0.08])
+@pytest.mark.parametrize("top_three_functioning", [True, False])
+def test_fabrication_instance(n, eps, top_three_functioning):
+    num_instances = 10000
+    rng_seed = 2545685 * n
+    rng = np.random.default_rng(rng_seed)
+    top_faulty_counter = 0
+    for instance in range(num_instances):
+        tree = QRAMRouter()
+        full_tree = tree.create_tree(n)
+        full_tree.fabrication_instance(
+            eps, rng, top_three_functioning=top_three_functioning
+        )
+        assert full_tree.tree_depth() == n
+        if top_three_functioning:
+            assert full_tree.functioning
+            assert full_tree.right_child.functioning and full_tree.left_child.functioning
+        else:
+            if not full_tree.functioning:
+                top_faulty_counter += 1
+    if not top_three_functioning:
+        assert eps - 0.01 < top_faulty_counter / num_instances < eps + 0.01

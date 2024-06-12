@@ -1,4 +1,5 @@
 import copy
+from functools import partial
 from typing import Callable
 
 import numpy as np
@@ -86,34 +87,31 @@ class QRAMRouter:
     def fabrication_instance(
         self,
         failure_rate=0.3,
-        rn_list=None,
+        rng=None,
         k_level=0,
         top_three_functioning=False
     ):
         """this function utilizes a list of random numbers (if passed) to decide
         if a given router is faulty. It strips off the first one and returns
         the remainder of the list for use for deciding if other routers are faulty"""
-        if rn_list is None:
-            rnd = np.random.random()
-            new_rn_list = None
-        else:
-            rnd = rn_list[0]
-            new_rn_list = rn_list[1:]
+        if rng is None:
+            rng = np.random.default_rng(42)
+        rnd = rng.random()
         if rnd > failure_rate or (top_three_functioning and k_level <= 1):
             self.functioning = True
             if self.right_child:
-                new_rn_list = self.right_child.fabrication_instance(
-                    failure_rate, rn_list=new_rn_list, k_level=k_level+1, top_three_functioning=top_three_functioning
+                rng = self.right_child.fabrication_instance(
+                    failure_rate, rng=rng, k_level=k_level+1, top_three_functioning=top_three_functioning
                 )
-                new_rn_list = self.left_child.fabrication_instance(
-                    failure_rate, rn_list=new_rn_list, k_level=k_level+1, top_three_functioning=top_three_functioning
+                rng = self.left_child.fabrication_instance(
+                    failure_rate, rng=rng, k_level=k_level+1, top_three_functioning=top_three_functioning
                 )
-                return new_rn_list
+                return rng
             else:
-                return new_rn_list
+                return rng
         else:
             self.set_attr_self_and_below("functioning", False)
-            return new_rn_list
+            return rng
 
     def simple_reallocation(self, m, k=1):
         """m is the depth of the QRAM we are after, and k is the level of the QRAM this
@@ -405,8 +403,6 @@ class MonteCarloRouterInstances:
         self.filepath = filepath
         self.memory_efficient = memory_efficient
         self._init_attrs = set(self.__dict__.keys())
-        self.rng = np.random.default_rng(rng_seed)
-        self.rn_list = self.rng.random((num_instances, 2 ** n))
         if not self.memory_efficient:
             self.trees = self.create_trees()
         else:
@@ -415,11 +411,11 @@ class MonteCarloRouterInstances:
     def param_dict(self):
         return {k: v for k, v in self.__dict__.items() if k in self._init_attrs}
 
-    def run_for_one_tree(self, idx):
-        rn_list = self.rn_list[idx]
+    def run_for_one_tree(self, idx_and_rng):
+        idx, rng = idx_and_rng[0]
         tree = QRAMRouter().create_tree(self.n)
-        tree.fabrication_instance(
-            self.eps, rn_list, top_three_functioning=self.top_three_functioning
+        _ = tree.fabrication_instance(
+            self.eps, rng, top_three_functioning=self.top_three_functioning
         )
         _, num_flags_global = tree.router_repair(method="global")
         _, num_flags_as_you_go = tree.router_repair(method="as_you_go", start="simple_success")
@@ -449,8 +445,11 @@ class MonteCarloRouterInstances:
                 (_, n_success) = list(zip(*simple_repair_n))
                 n_n_success[:, idx] = n_success
         else:
+            parent_rng = np.random.default_rng(self.rng_seed)
+            streams = parent_rng.spawn(self.num_instances)
+            idxs_and_streams = list(zip(np.arange(self.num_instances), streams))
             result = unpack_param_map(param_map(
-                self.run_for_one_tree, [np.arange(self.num_instances), ]
+                self.run_for_one_tree, [idxs_and_streams, ]
             )).astype(float)
             num_flags_global = result[..., 0]
             num_flags_as_you_go = result[..., 1]
@@ -470,17 +469,20 @@ class MonteCarloRouterInstances:
     def create_trees(self):
         return list(map(lambda _: QRAMRouter().create_tree(self.n), range(self.num_instances)))
 
-    def _fab_instance_for_one_tree(self, tree_rn_list):
-        tree, rn_list = tree_rn_list
+    def _fab_instance_for_one_tree(self, tree_and_rng):
+        tree, rng = tree_and_rng
         _ = tree.fabrication_instance(
-            self.eps, rn_list, top_three_functioning=self.top_three_functioning
+            self.eps, rng, top_three_functioning=self.top_three_functioning
         )
         return tree
 
     def fab_instance_for_all_trees(self):
         if self.trees is None:
             self.trees = self.create_trees()
-        self.trees = list(map(self._fab_instance_for_one_tree, zip(self.trees, self.rn_list)))
+        parent_rng = np.random.default_rng(self.rng_seed)
+        streams = parent_rng.spawn(self.num_instances)
+        trees_and_streams = list(zip(self.trees, streams))
+        self.trees = list(map(self._fab_instance_for_one_tree, trees_and_streams))
 
     def map_over_trees(self, func, *args, **kwargs):
         if self.trees is None:
@@ -532,20 +534,20 @@ if __name__ == "__main__":
     TREE_DEPTH = 7
     EPS = 0.03  # 0.375
     RNG_SEED = 2545672423485  # 254567242348543
-    mc_inst = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, rng_seed=RNG_SEED, memory_efficient=True)
+    mc_inst = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, rng_seed=RNG_SEED, memory_efficient=False)
     mc_inst.run()
     # 6722222232 gives 5 and 3 configuration (not simply repairable)
     # 6243254322 gives 6 and 2
     # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
     # tree_Depth = 10, eps = 0.05 rng 2543567243234588543 2770 below
 
-    rng = np.random.default_rng(RNG_SEED)  # 27585353
-    RN_LIST = rng.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
+    RNG = np.random.default_rng(RNG_SEED)  # 27585353
+    RN_LIST = RNG.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
 
     for tree_idx in range(53, NUM_INSTANCES):
         MYTREE = QRAMRouter()
         FULLTREE = MYTREE.create_tree(TREE_DEPTH)
-        FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[tree_idx], top_three_functioning=True)
+        FULLTREE.fabrication_instance(EPS, RNG, top_three_functioning=True)
         # FULLTREE.print_tree()
         assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
         _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
@@ -555,7 +557,7 @@ if __name__ == "__main__":
     MYTREE = QRAMRouter()
     FULLTREE = MYTREE.create_tree(TREE_DEPTH)
     _, simple_flag = FULLTREE.simple_reallocation(TREE_DEPTH)
-    FULLTREE.fabrication_instance(EPS, rn_list=RN_LIST[27], top_three_functioning=True)  # half full n=6 #255
+    FULLTREE.fabrication_instance(EPS, RNG, top_three_functioning=True)  # half full n=6 #255
     assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
     _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
     _final_repair_simple, _flag_qubits_simple = FULLTREE.router_repair(method="as_you_go", start="simple_success")

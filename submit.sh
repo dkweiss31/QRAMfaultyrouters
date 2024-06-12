@@ -18,7 +18,7 @@ n=5
 top_three_functioning=1
 
 # num_eps * num_instance_scans should equal number of array jobs
-num_eps=20
+num_eps=10
 num_instance_scans=100
 eps_idx=$((SLURM_ARRAY_TASK_ID / num_instance_scans))
 eps_seq=($(seq 1 1 $num_eps))

@@ -421,7 +421,7 @@ class MonteCarloRouterInstances:
         )
 
     def run(self):
-        print(f"running faulty QRAM simulation with {self._init_attrs}")
+        print(f"running faulty QRAM simulation with {self.__dict__}")
         parent_rng = np.random.default_rng(self.rng_seed)
         streams = parent_rng.spawn(self.num_instances)
         idxs_and_streams = list(zip(np.arange(self.num_instances), streams))

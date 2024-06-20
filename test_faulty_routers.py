@@ -8,7 +8,7 @@ from faulty_routers import MonteCarloRouterInstances, QRAMRouter
 @pytest.mark.parametrize("n", [5, 6, 7])
 @pytest.mark.parametrize("eps", [0.02, 0.08])
 @pytest.mark.parametrize("top_three_functioning", [True, False])
-def test_memory_efficient(n, eps, top_three_functioning):
+def test_monte_carlo(n, eps, top_three_functioning):
     num_instances = 1000
     rng_seed = 2545685
     filepath = "tmp.h5py"
@@ -17,6 +17,23 @@ def test_memory_efficient(n, eps, top_three_functioning):
     )
     result = mc.run()
     os.remove(filepath)
+
+
+@pytest.mark.parametrize("n", [8, 10, 13])
+@pytest.mark.parametrize("eps", [0.01, 0.02, 0.03, 0.04])
+@pytest.mark.parametrize("method", ["global", "as_you_go"])
+@pytest.mark.parametrize("start", ["two", "simple_success"])
+def test_repairs(n, eps, method, start):
+    tree = QRAMRouter()
+    full_tree = tree.create_tree(n)
+    rng_seed = 2545685 * n + 2667485973
+    rng = np.random.default_rng(rng_seed)
+    full_tree.fabrication_instance(
+        eps, rng, top_three_functioning=True
+    )
+    print(full_tree)
+    repair, flag_qubits = full_tree.router_repair(method=method, start=start)
+    print(0)
 
 
 @pytest.mark.parametrize("n", [5, 6, 7])

@@ -1,4 +1,5 @@
 import copy
+import functools
 import itertools
 from functools import reduce
 
@@ -6,7 +7,7 @@ import numpy as np
 from colorama import init as colorama_init
 from colorama import Fore, Style
 
-from quantum_utils import write_to_h5, param_map, unpack_param_map
+from quantum_utils import write_to_h5, param_map, unpack_param_map, parallel_map
 
 colorama_init()
 
@@ -355,7 +356,7 @@ class QRAMRouter:
             start = kwargs.get("start", "two")
             repair_dict_or_list, overall_mapping_dict, bfp_list = self.repair_as_you_go(start=start)
             self.verify_allocation(overall_mapping_dict)
-            return overall_mapping_dict, [len(bfps) for bfps in bfp_list]
+            return overall_mapping_dict, len(bfp_list[-1])
         else:
             raise RuntimeError("method not supported")
 
@@ -432,21 +433,25 @@ class QRAMRouter:
                 unique_avail_routers, unique_avail_idxs = np.unique(
                     bfp_slice[1], return_index=True
                 )
-                return len(unique_avail_routers), unique_avail_idxs, bfp_slice
+                # among these, how many are fixing unique faulty routers
+                unique_faulty_routers, unique_faulty_idxs = np.unique(
+                    bfp_slice[0][unique_avail_idxs], return_index=True
+                )
+                num_unique = len(unique_faulty_routers)
+                return num_unique, unique_avail_idxs, unique_faulty_idxs, bfp_slice
 
-            num_unique_for_bfps, unique_idxs, bfp_slices = list(zip(*map(
+            num_unique_for_bfps, unique_avail_idxs, unique_faulty_idxs, bfp_slices = list(zip(*map(
                 find_max_unique, unique_bfps
             )))
             max_unique_idx = np.argmax(num_unique_for_bfps)
             best_bfp = unique_bfps[max_unique_idx]
             bfp_slice = bfp_slices[max_unique_idx]
-            unique_avail_idxs = unique_idxs[max_unique_idx]
-            # by taking unique_avail_idxs, dealing with the issue of possible multiple
-            # assignment
-            assigned_faulty_routers_idxs = bfp_slice[0][unique_avail_idxs]
-            assigned_avail_routers_idxs = bfp_slice[1][unique_avail_idxs]
-            assigned_faulty_routers = faulty_router_list[assigned_faulty_routers_idxs]
-            assigned_avail_routers = available_router_list[assigned_avail_routers_idxs]
+            _unique_avail_idx = unique_avail_idxs[max_unique_idx]
+            _unique_faulty_idx = unique_faulty_idxs[max_unique_idx]
+            unique_faulty_idx = bfp_slice[0][_unique_avail_idx][_unique_faulty_idx]
+            unique_avail_idx = bfp_slice[1][_unique_avail_idx][_unique_faulty_idx]
+            assigned_faulty_routers = faulty_router_list[unique_faulty_idx]
+            assigned_avail_routers = available_router_list[unique_avail_idx]
             # check now that for the assignments we've made, they actually
             # use a bit-flip pattern that is available to us
             actual_bfps = self.bit_flip_pattern_int(
@@ -460,10 +465,10 @@ class QRAMRouter:
             ))
             # don't need to worry anymore about reassigning these
             faulty_router_list = np.delete(
-                faulty_router_list, assigned_faulty_routers_idxs
+                faulty_router_list, unique_faulty_idx
             )
             available_router_list = np.delete(
-                available_router_list, assigned_avail_routers_idxs
+                available_router_list, unique_avail_idx
             )
             if len(faulty_router_list) == 0:
                 break
@@ -538,13 +543,14 @@ class MonteCarloRouterInstances:
             ([num_flags_global, num_flags_as_you_go, num_faulty], simple_success)
         )
 
-    def run(self):
+    def run(self, num_cpus=1):
         print(f"running faulty QRAM simulation with {self.__dict__}")
         parent_rng = np.random.default_rng(self.rng_seed)
         streams = parent_rng.spawn(self.num_instances)
         idxs_and_streams = list(zip(np.arange(self.num_instances), streams))
+        map_fun = functools.partial(parallel_map, num_cpus)
         result = unpack_param_map(param_map(
-            self.run_for_one_tree, [idxs_and_streams, ]
+            self.run_for_one_tree, [idxs_and_streams, ], map_fun=map_fun
         )).astype(float)
         num_flags_global = result[..., 0]
         num_flags_as_you_go = result[..., 1]

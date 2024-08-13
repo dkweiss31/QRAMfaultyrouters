@@ -23,7 +23,7 @@ eps_seq=($(seq 1 1 $num_eps))
 eps=$(echo "scale=2; ${eps_seq[$eps_idx]} / 100" | bc)
 
 num_instances=100000
-rng_seed=$((IDX * n * 3567483 + 23784 * n + 68493 * IDX + 5627))
+rng_seed=$((SLURM_ARRAY_TASK_ID * n * 3567483 + 23784 * eps_idx + 5627))
 ############################
 
 module load miniconda

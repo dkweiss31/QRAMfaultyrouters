@@ -16,6 +16,7 @@ if __name__ == "__main__":
     parser.add_argument("--rng_seed", default=4674, type=int, help="rng seed")
     parser.add_argument("--top_three_functioning", default=1, type=int,
                         help="whether or not the top three routers should always be functioning")
+    parser.add_argument("--num_cpus", default=1, type=int, help="number of cpus")
     args = parser.parse_args()
     if args.idx == -1:
         file_str = f"faulty_routers_n_{args.n}_eps_{args.eps}" \
@@ -33,4 +34,4 @@ if __name__ == "__main__":
         top_three_functioning=args.top_three_functioning,
         filepath=filename,
     )
-    mcinstance.run()
+    mcinstance.run(args.num_cpus)

@@ -308,7 +308,6 @@ class QRAMRouter:
             new_repair_dict, overall_mapping_dict, bfp = self._repair_as_you_go(
                 inter_depth, original_tree, augmented_tree, overall_mapping_dict
             )
-            self.verify_allocation(new_repair_dict, bfp)
             repair_dict_list.append(new_repair_dict)
             bfp_list.append(bfp)
         return repair_dict_list, overall_mapping_dict, bfp_list
@@ -342,18 +341,18 @@ class QRAMRouter:
             return {}, np.inf
         if method == "global":
             repair_dict_or_list, bfp = self.router_repair_global(faulty_router_list, available_router_list)
-            self.verify_allocation(repair_dict_or_list, bfp)
+            self.verify_allocation(repair_dict_or_list)
             flag_qubits = set(self.compute_flag_qubits(repair_dict_or_list))
             return repair_dict_or_list, len(flag_qubits)
         elif method == "_global":
             repair_dict_or_list, bfp = self._router_repair_global(faulty_router_list, available_router_list)
-            self.verify_allocation(repair_dict_or_list, bfp, generating=False)
+            self.verify_allocation(repair_dict_or_list)
             flag_qubits = set(self.compute_flag_qubits(repair_dict_or_list))
             return repair_dict_or_list, len(flag_qubits)
         elif method == "as_you_go":
             start = kwargs.get("start", "two")
             repair_dict_or_list, overall_mapping_dict, bfp_list = self.repair_as_you_go(start=start)
-            # each step is verified, no need to do an overall verification here
+            self.verify_allocation(overall_mapping_dict)
             return overall_mapping_dict, [len(bfps) for bfps in bfp_list]
         else:
             raise RuntimeError("method not supported")
@@ -396,62 +395,44 @@ class QRAMRouter:
             generating_set = self.construct_generating_set(picked_bit_flip_patterns)
             frl, arl = np.meshgrid(faulty_router_list, available_router_list, indexing="ij")
             bit_flip_pattern_mat = self.bit_flip_pattern_int(frl, arl)
-            # this is likely the slowest step
             bit_flip_patterns, bit_flip_pattern_occurences = np.unique(bit_flip_pattern_mat, return_counts=True)
-            # sort them by pattern for ease of using searchsorted later
-            sorted_by_pattern_idxs = np.argsort(bit_flip_patterns)
-            bit_flip_patterns_sorted_by_pattern = bit_flip_patterns[sorted_by_pattern_idxs]
-            occurences_sorted_by_pattern = bit_flip_pattern_occurences[sorted_by_pattern_idxs]
             # compute p + G to obtain all possible bit-flip patterns we could choose
-            bf_mesh, gs_mesh = np.meshgrid(bit_flip_patterns, generating_set)
+            bf_mesh, gs_mesh = np.meshgrid(bit_flip_patterns, generating_set, indexing="ij")
             possible_bit_flip_patterns_mat = self.bit_flip_pattern_int(bf_mesh, gs_mesh)
-            _possible_bit_flip_patterns = np.unique(possible_bit_flip_patterns_mat)
-            possible_bit_flip_patterns = [
-                pbfp for pbfp in _possible_bit_flip_patterns if pbfp <= max_bit_flip_pattern
-            ]
+            possible_bit_flip_patterns = np.unique(possible_bit_flip_patterns_mat)
             # given possible_bit_flip_patterns, compute the below to determine
             # which bit-flip patterns would actually be obtained from a given pattern in
             # possible_bit_flip_patterns
-            pbfp_mesh, gs_mesh = np.meshgrid(possible_bit_flip_patterns, generating_set)
-            resulting_bfps = self.bit_flip_pattern_int(pbfp_mesh, gs_mesh)
-            bfp_indices = np.searchsorted(bit_flip_patterns_sorted_by_pattern, resulting_bfps)
-            out_of_bounds_indices = np.argwhere(bfp_indices == len(bit_flip_patterns))
-            bfp_indices[tuple(out_of_bounds_indices.T)] = 0
-            number_of_fixes = occurences_sorted_by_pattern[bfp_indices]
-            # searchsorted returns 0 or len(bit_flip_patterns) for out of bounds indices. Set
-            # both to zero
-            number_of_fixes[tuple(out_of_bounds_indices.T)] = 0
-            number_of_fixes = np.where(
-                bit_flip_patterns_sorted_by_pattern[bfp_indices] == resulting_bfps,
-                number_of_fixes,
-                0,
-            )
-            # sum over the generating set axis
-            total_number_of_fixes = np.sum(number_of_fixes, axis=0)
-            # issue whereby when only a few available routers, can have same router
-            # get assigned via different elements in the generating set. Loop through
-            # until we find a set with no repeats
-            bit_flip_pattern_idxs = np.argsort(total_number_of_fixes)[::-1]
-            for loop_idx, bit_flip_pattern_idx in enumerate(bit_flip_pattern_idxs):
-                bit_flip_pattern = possible_bit_flip_patterns[bit_flip_pattern_idx]
-                all_possible_bfps = resulting_bfps[:, bit_flip_pattern_idx]
-                assignment_idxs = [np.argwhere(bfp == bit_flip_pattern_mat) for bfp in all_possible_bfps]
-                assignment_idxs = np.concatenate(assignment_idxs, axis=0)
-                avail_routers = assignment_idxs[:, 1]
-                if len(avail_routers) == len(np.unique(avail_routers)):
-                    break
-                if loop_idx == len(bit_flip_pattern_idxs) - 1:
-                    raise RuntimeError("no new bfp found")
-            picked_bit_flip_patterns.append(bit_flip_pattern)
-
-            for assignment_idx in assignment_idxs:
-                faulty_idx, avail_idx = assignment_idx
-                faulty_router = faulty_router_list[faulty_idx]
-                avail_router = available_router_list[avail_idx]
-                repair_dict[faulty_router] = avail_router
+            gs_mesh, pbfp_mesh = np.meshgrid(generating_set, possible_bit_flip_patterns, indexing="ij")
+            resulting_bfps = self.bit_flip_pattern_int(gs_mesh, pbfp_mesh)
+            # indices are ijkl where i are faulty routers, j are available routers,
+            # k are generating set and l are possible bit flip patterns
+            matches = bit_flip_pattern_mat[..., None, None] == resulting_bfps
+            match_indices = np.where(matches)
+            match_indices_array = np.array(match_indices)
+            possible_bfps_for_matches = possible_bit_flip_patterns[match_indices[3]]
+            unique_bfps = np.unique(possible_bfps_for_matches)
+            unique_avail_max = 0
+            for unique_bfp in unique_bfps:
+                bfp_idxs = np.where(unique_bfp == possible_bfps_for_matches)
+                bfp_slice = match_indices_array[..., bfp_idxs[0]]
+                unique_avail_routers, unique_avail_idxs = np.unique(bfp_slice[1], return_index=True)
+                if len(unique_avail_routers) > unique_avail_max:
+                    unique_avail_max = len(unique_avail_routers)
+                    assigned_faulty_routers_idxs = bfp_slice[0][unique_avail_idxs]
+                    assigned_avail_routers_idxs = bfp_slice[1][unique_avail_idxs]
+                    best_bfp = unique_bfp
+            # want to do an assert here that the bit-flip pattern actually fixes this with appropriate
+            # friend from the generating set
+            picked_bit_flip_patterns.append(best_bfp)
+            faulty_routers_now_assigned = faulty_router_list[assigned_faulty_routers_idxs]
+            available_routers_now_assigned = available_router_list[assigned_avail_routers_idxs]
+            repair_dict = repair_dict | dict(zip(
+                faulty_routers_now_assigned, available_routers_now_assigned
+            ))
             # don't need to worry anymore about reassigning these
-            faulty_router_list = np.delete(faulty_router_list, assignment_idxs[:, 0])
-            available_router_list = np.delete(available_router_list, assignment_idxs[:, 1])
+            faulty_router_list = np.delete(faulty_router_list, assigned_faulty_routers_idxs)
+            available_router_list = np.delete(available_router_list, assigned_avail_routers_idxs)
             if len(faulty_router_list) == 0:
                 break
         return repair_dict, picked_bit_flip_patterns
@@ -472,24 +453,19 @@ class QRAMRouter:
                 generating_set.append(bit_flip_pattern)
         return np.unique(generating_set)
 
-    def verify_allocation(self, repair_dict, bit_flip_patterns, generating=True):
-        if generating:
-            generating_set = self.construct_generating_set(bit_flip_patterns)
-        else:
-            generating_set = bit_flip_patterns
+    def verify_allocation(self, repair_dict):
         original_tree, augmented_tree = self.assign_original_and_augmented()
         faulty_router_list = original_tree.router_list_functioning_or_not(functioning=False)
         available_router_list = augmented_tree.router_list_functioning_or_not(functioning=True)
         # no repeated assignments
         assert len(repair_dict.values()) == len(set(repair_dict.values()))
+        # all faulty routers assigned
+        assert len(repair_dict.values()) == len(faulty_router_list)
         for repaired_router, available_router in repair_dict.items():
             # all routers assigned (taking into account that we assign "further up")
             self._check_router_in_list(repaired_router, faulty_router_list)
             # only assigned to live routers
             self._check_router_in_list(available_router, available_router_list)
-            # the appropriate bit-flip pattern is present
-            bfp = self.bit_flip_pattern_int(available_router, repaired_router)
-            assert bfp in generating_set
 
 
 class MonteCarloRouterInstances:

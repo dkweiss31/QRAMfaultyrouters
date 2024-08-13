@@ -19,24 +19,24 @@ def test_monte_carlo(n, eps, top_three_functioning):
     os.remove(filepath)
 
 
-@pytest.mark.parametrize("n", [8, 10, 13])
-@pytest.mark.parametrize("eps", [0.01, 0.02, 0.03, 0.04])
-@pytest.mark.parametrize("method", ["global", "as_you_go"])
+@pytest.mark.parametrize("n", [8, 10, 11])
+@pytest.mark.parametrize("eps", [0.01, 0.02, 0.04])
+@pytest.mark.parametrize("method", ["_global", "global", "as_you_go"])
 @pytest.mark.parametrize("start", ["two", "simple_success"])
 def test_repairs(n, eps, method, start):
-    tree = QRAMRouter()
-    full_tree = tree.create_tree(n)
-    rng_seed = 2545685 * n + 2667485973
-    rng = np.random.default_rng(rng_seed)
-    full_tree.fabrication_instance(
-        eps, rng, top_three_functioning=True
-    )
-    print(full_tree)
-    repair, flag_qubits = full_tree.router_repair(method=method, start=start)
-    print(0)
+    num_instances = 100
+    for instance in range(num_instances):
+        tree = QRAMRouter()
+        full_tree = tree.create_tree(n)
+        rng_seed = 2545685 * n + 2667485973 * instance + 2674
+        rng = np.random.default_rng(rng_seed)
+        full_tree.fabrication_instance(
+            eps, rng, top_three_functioning=True
+        )
+        repair, flag_qubits = full_tree.router_repair(method=method, start=start)
 
 
-@pytest.mark.parametrize("n", [5, 6, 7])
+@pytest.mark.parametrize("n", [5, 6, 7, 10])
 @pytest.mark.parametrize("eps", [0.02, 0.08])
 @pytest.mark.parametrize("top_three_functioning", [True, False])
 def test_fabrication_instance(n, eps, top_three_functioning):

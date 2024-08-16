@@ -345,8 +345,8 @@ class QRAMRouter:
                 faulty_router_list, available_router_list
             )
             self.verify_allocation(repair_dict_or_list)
-            flag_qubits = set(self.compute_flag_qubits(repair_dict_or_list))
-            return repair_dict_or_list, len(flag_qubits)
+            # -1 to take care of 0 bfp, which doesn't cost a flag qubit
+            return repair_dict_or_list, len(bfp) - 1
         elif method == "_global":
             repair_dict_or_list, bfp = self._router_repair_global(faulty_router_list, available_router_list)
             self.verify_allocation(repair_dict_or_list)
@@ -356,7 +356,11 @@ class QRAMRouter:
             start = kwargs.get("start", "two")
             repair_dict_or_list, overall_mapping_dict, bfp_list = self.repair_as_you_go(start=start)
             self.verify_allocation(overall_mapping_dict)
-            return overall_mapping_dict, len(bfp_list[-1])
+            return overall_mapping_dict, len(bfp_list[-1]) - 1
+        elif method == "enumerate":
+            repair_dict_or_list = dict(zip(faulty_router_list, available_router_list))
+            # + 1 is to take care of the no error case which has to be included
+            return repair_dict_or_list, int(np.ceil(np.log2(len(faulty_router_list) + 1)))
         else:
             raise RuntimeError("method not supported")
 
@@ -534,13 +538,14 @@ class MonteCarloRouterInstances:
         )
         _, num_flags_global = tree.router_repair(method="global")
         _, num_flags_as_you_go = tree.router_repair(method="as_you_go", start="simple_success")
+        _, num_flags_enumerate = tree.router_repair(method="enumerate")
         num_faulty = tree.count_number_faulty_addresses()
         simple_success = []
         for n in range(3, self.n + 1):
             _, n_success = tree.simple_reallocation(n)
             simple_success.append(int(n_success))
         return np.concatenate(
-            ([num_flags_global, num_flags_as_you_go, num_faulty], simple_success)
+            ([num_flags_global, num_flags_as_you_go, num_flags_enumerate, num_faulty], simple_success)
         )
 
     def run(self, num_cpus=1):
@@ -554,11 +559,13 @@ class MonteCarloRouterInstances:
         )).astype(float)
         num_flags_global = result[..., 0]
         num_flags_as_you_go = result[..., 1]
-        num_faulty = result[..., 2]
-        n_n_success = result[..., 3:]
+        num_flags_enumerate = result[..., 2]
+        num_faulty = result[..., 3]
+        n_n_success = result[..., 4:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
+            "num_flags_enumerate": num_flags_enumerate,
             "num_faulty": num_faulty,
         }
         for idx, n in enumerate(range(3, self.n + 1)):

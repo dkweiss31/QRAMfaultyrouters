@@ -95,3 +95,18 @@ def test_fabrication_instance(n, eps, top_three_functioning):
     else:
         ideal_eps = eps + (1 - eps) * eps
     assert ideal_eps - 0.01 < rando_faulty_counter / num_instances < ideal_eps + 0.01
+
+
+def test_specific_faulty_tree():
+    n = 6
+    eps = 0.05
+    rng_seed = 2392900
+    rng = np.random.default_rng(rng_seed)
+    faulty_tree = QRAMRouter()
+    faulty_tree = faulty_tree.create_tree(n)
+    faulty_tree.fabrication_instance(eps, rng, top_three_functioning=True)
+    assignment_global, flag_qubits_global = faulty_tree.router_repair(method="global")
+    assignment_as_you_go, flag_qubits_as_you_go = faulty_tree.router_repair(method="as_you_go")
+    assignment_enumerate, flag_qubits_enumerate = faulty_tree.router_repair(method="enumerate")
+    assert flag_qubits_global == flag_qubits_as_you_go == 1
+    assert flag_qubits_enumerate == 2

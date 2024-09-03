@@ -172,6 +172,22 @@ class QRAMRouter:
         except SimpleReallocationFailure:
             return [], 0
 
+    def count_available_addresses_all_levels(self):
+        # we're at the bottom of the tree, and we only reach the bottom if
+        # the router is functioning
+        if self.right_child is None:
+            return 2
+        # if we've reached here, we're at an interior node
+        if self.right_child.functioning:
+            count = self.right_child.count_available_addresses_all_levels()
+        else:
+            count = 1
+        if self.left_child.functioning:
+            count += self.left_child.count_available_addresses_all_levels()
+        else:
+            count += 1
+        return count
+
     def count_number_faulty_addresses(self):
         if self.right_child is None:
             if self.functioning:
@@ -540,12 +556,13 @@ class MonteCarloRouterInstances:
         _, num_flags_as_you_go = tree.router_repair(method="as_you_go", start="simple_success")
         _, num_flags_enumerate = tree.router_repair(method="enumerate")
         num_faulty = tree.count_number_faulty_addresses()
+        num_avail_all = tree.count_available_addresses_all_levels()
         simple_success = []
         for n in range(3, self.n + 1):
             _, n_success = tree.simple_reallocation(n)
             simple_success.append(int(n_success))
         return np.concatenate(
-            ([num_flags_global, num_flags_as_you_go, num_flags_enumerate, num_faulty], simple_success)
+            ([num_flags_global, num_flags_as_you_go, num_flags_enumerate, num_faulty, num_avail_all], simple_success)
         )
 
     def run(self, num_cpus=1):
@@ -561,12 +578,14 @@ class MonteCarloRouterInstances:
         num_flags_as_you_go = result[..., 1]
         num_flags_enumerate = result[..., 2]
         num_faulty = result[..., 3]
-        n_n_success = result[..., 4:]
+        num_avail_all = result[..., 4]
+        n_n_success = result[..., 5:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
             "num_flags_enumerate": num_flags_enumerate,
             "num_faulty": num_faulty,
+            "num_avail_all": num_avail_all,
         }
         for idx, n in enumerate(range(3, self.n + 1)):
             data_dict[f"n{n}_success"] = n_n_success[..., idx]

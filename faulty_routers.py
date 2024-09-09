@@ -457,25 +457,6 @@ class QRAMRouter:
                 break
         return repair_dict, picked_bit_flip_patterns
 
-    def find_generating_set(self, bit_flip_patterns):
-        if isinstance(bit_flip_patterns[0], (str, np.str_)):
-            bit_flip_patterns = [int(bfp, 2) for bfp in bit_flip_patterns]
-        basis = []
-        for a in bit_flip_patterns:
-            A = copy.deepcopy(a)
-            for b in basis:
-                # A should always decrease if the basis is sorted. If it is zero by the
-                # end of the line, then it is linearly dependent
-                A = min(A, A ^ b)
-            if A:
-                ind = 0
-                # Find the right index to insert A such that the basis remains in decreasing order
-                while ind < len(basis) and basis[ind] > A:
-                    ind += 1
-                basis.insert(ind, A)
-        basis = [bin(bfp) for bfp in basis]
-        return basis
-
     @staticmethod
     def _check_router_in_list(compare_router, router_list):
         compare_router_height = len(compare_router)

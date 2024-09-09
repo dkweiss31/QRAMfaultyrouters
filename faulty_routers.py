@@ -364,11 +364,6 @@ class QRAMRouter:
             self.verify_allocation(repair_dict_or_list)
             # -1 to take care of 0 bfp, which doesn't cost a flag qubit
             return repair_dict_or_list, len(bfp) - 1
-        elif method == "_global":
-            repair_dict_or_list, bfp = self._router_repair_global(faulty_router_list, available_router_list)
-            self.verify_allocation(repair_dict_or_list)
-            flag_qubits = set(self.compute_flag_qubits(repair_dict_or_list))
-            return repair_dict_or_list, len(flag_qubits)
         elif method == "as_you_go":
             start = kwargs.get("start", "two")
             repair_dict_or_list, overall_mapping_dict, bfp_list = self.repair_as_you_go(start=start)
@@ -380,33 +375,6 @@ class QRAMRouter:
             return repair_dict_or_list, int(np.ceil(np.log2(len(faulty_router_list) + 1)))
         else:
             raise RuntimeError("method not supported")
-
-    def _router_repair_global(self, faulty_router_list, available_router_list):
-        faulty_router_list = np.array(faulty_router_list)
-        available_router_list = np.array(available_router_list)
-        repair_dict = {}
-        picked_bit_flip_patterns = []
-        while True:
-            frl, arl = np.meshgrid(faulty_router_list, available_router_list, indexing="ij")
-            bit_flip_pattern_mat = self.bit_flip_pattern_int(frl, arl)
-            # this is likely the slowest step
-            bit_flip_patterns, bit_flip_pattern_occurences = np.unique(bit_flip_pattern_mat, return_counts=True)
-            sorted_by_occurences_idxs = np.argsort(bit_flip_pattern_occurences)
-            bit_flip_pattern = bit_flip_patterns[sorted_by_occurences_idxs[-1]]
-            picked_bit_flip_patterns.append(bit_flip_pattern)
-            assignment_idxs = np.argwhere(bit_flip_pattern_mat == bit_flip_pattern)
-
-            for assignment_idx in assignment_idxs:
-                faulty_idx, avail_idx = assignment_idx
-                faulty_router = faulty_router_list[faulty_idx]
-                avail_router = available_router_list[avail_idx]
-                repair_dict[faulty_router] = avail_router
-            # don't need to worry anymore about reassigning these
-            faulty_router_list = np.delete(faulty_router_list, assignment_idxs[:, 0])
-            available_router_list = np.delete(available_router_list, assignment_idxs[:, 1])
-            if len(faulty_router_list) == 0:
-                break
-        return repair_dict, picked_bit_flip_patterns
 
     def router_repair_global(self, faulty_router_list, available_router_list):
         faulty_router_list = np.array(faulty_router_list)

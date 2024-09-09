@@ -618,39 +618,3 @@ class AnalyticUnrepair:
 class SimpleReallocationFailure(Exception):
     """Raised when the simple reallocaion fails at runtime"""
     pass
-
-
-if __name__ == "__main__":
-    NUM_INSTANCES = 1000
-    TREE_DEPTH = 7
-    EPS = 0.03  # 0.375
-    RNG_SEED = 2545672423485  # 254567242348543
-    mc_inst = MonteCarloRouterInstances(TREE_DEPTH, EPS, NUM_INSTANCES, rng_seed=RNG_SEED)
-    mc_inst.run()
-    # 6722222232 gives 5 and 3 configuration (not simply repairable)
-    # 6243254322 gives 6 and 2
-    # 22543268254 fails at the second level: starts off with 6, 4, but then drops to 3, 1 on the right.
-    # tree_Depth = 10, eps = 0.05 rng 2543567243234588543 2770 below
-
-    RNG = np.random.default_rng(RNG_SEED)  # 27585353
-    RN_LIST = RNG.random((NUM_INSTANCES, 2 ** TREE_DEPTH))
-
-    for tree_idx in range(53, NUM_INSTANCES):
-        MYTREE = QRAMRouter()
-        FULLTREE = MYTREE.create_tree(TREE_DEPTH)
-        FULLTREE.fabrication_instance(EPS, RNG, top_three_functioning=True)
-        # FULLTREE.print_tree()
-        assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
-        _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
-        _final_repair_simple, _flag_qubits_simple = FULLTREE.router_repair(method="as_you_go", start="simple_success")
-        print(tree_idx, _flag_qubits_simple, flag_qubits_global, _flag_qubits)
-        total_global = FULLTREE.total_flag_cost(assignment_global)
-    MYTREE = QRAMRouter()
-    FULLTREE = MYTREE.create_tree(TREE_DEPTH)
-    _, simple_flag = FULLTREE.simple_reallocation(TREE_DEPTH)
-    FULLTREE.fabrication_instance(EPS, RNG, top_three_functioning=True)  # half full n=6 #255
-    assignment_global, flag_qubits_global = FULLTREE.router_repair(method="global")
-    _final_repair, _flag_qubits = FULLTREE.router_repair(method="as_you_go")
-    _final_repair_simple, _flag_qubits_simple = FULLTREE.router_repair(method="as_you_go", start="simple_success")
-    total_global = FULLTREE.total_flag_cost(assignment_global)
-    print(0)

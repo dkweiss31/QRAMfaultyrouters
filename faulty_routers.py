@@ -1,6 +1,7 @@
 import copy
 import functools
 import itertools
+import time
 from functools import reduce
 
 import numpy as np
@@ -412,8 +413,10 @@ class QRAMRouter:
         available_router_list = np.array(available_router_list)
         repair_dict = {}
         picked_bit_flip_patterns = [0, ]
+        full_basis = [2**idx for idx in range(len(faulty_router_list[0]) - 2)]
+        full_power_set = self.construct_power_set(full_basis)
         while True:
-            generating_set = self.construct_generating_set(picked_bit_flip_patterns)
+            picked_power_set = self.construct_power_set(picked_bit_flip_patterns)
             frl, arl = np.meshgrid(
                 faulty_router_list, available_router_list, indexing="ij"
             )
@@ -421,78 +424,57 @@ class QRAMRouter:
             bit_flip_patterns, bit_flip_pattern_occurences = np.unique(
                 bit_flip_pattern_mat, return_counts=True
             )
-            # compute bit_flip_patterns + generating_set to obtain all possible bit-flip
-            # patterns we could choose
-            bf_mesh, gs_mesh = np.meshgrid(
-                bit_flip_patterns, generating_set, indexing="ij"
-            )
-            possible_bit_flip_patterns_mat = self.bit_flip_pattern_int(bf_mesh, gs_mesh)
-            possible_bit_flip_patterns = np.unique(possible_bit_flip_patterns_mat)
-            # given possible_bit_flip_patterns, compute the below to determine
-            # which bit-flip patterns would actually be obtained from a given pattern in
-            # possible_bit_flip_patterns
-            gs_mesh, pbfp_mesh = np.meshgrid(
-                generating_set, possible_bit_flip_patterns, indexing="ij"
-            )
-            resulting_bfps = self.bit_flip_pattern_int(gs_mesh, pbfp_mesh)
-            # indices of matches are ijkl where i are faulty routers, j are available routers,
-            # k are generating set and l are possible bit flip patterns
-            matches = bit_flip_pattern_mat[..., None, None] == resulting_bfps
-            match_indices = np.where(matches)
-            match_indices_array = np.array(match_indices)
-            possible_bfps_for_matches = possible_bit_flip_patterns[match_indices[3]]
-            unique_bfps = np.unique(possible_bfps_for_matches)
+            possible_bfps = [bfp for bfp in full_power_set if bfp not in picked_power_set]
 
-            def find_max_unique(unique_bfp):
-                # get all indices where this bfp is used
-                bfp_idxs = np.where(unique_bfp == possible_bfps_for_matches)
-                # bfp_slice contains info on which faulty, available routers are
-                # assigned via this bfp and element of the generating set
-                bfp_slice = match_indices_array[..., bfp_idxs[0]]
-                # interested in how many unique assignments we can get
-                unique_avail_routers, unique_avail_idxs = np.unique(
-                    bfp_slice[1], return_index=True
+            def num_fixed_for_bfp(possible_bfp):
+                possible_new_power_set = self.construct_power_set(picked_bit_flip_patterns + [possible_bfp, ])
+                # first index is the new power set index, second is the unique bit-flip patterns we want
+                matches = bit_flip_patterns[None, :] == possible_new_power_set[:, None]
+                matches = functools.reduce(
+                    lambda x, y: np.logical_or(x, y), matches, len(bit_flip_patterns) * [False, ]
                 )
-                # among these, how many are fixing unique faulty routers
-                unique_faulty_routers, unique_faulty_idxs = np.unique(
-                    bfp_slice[0][unique_avail_idxs], return_index=True
-                )
-                num_unique = len(unique_faulty_routers)
-                return num_unique, unique_avail_idxs, unique_faulty_idxs, bfp_slice
-
-            num_unique_for_bfps, unique_avail_idxs, unique_faulty_idxs, bfp_slices = list(zip(*map(
-                find_max_unique, unique_bfps
-            )))
-            max_unique_idx = np.argmax(num_unique_for_bfps)
-            best_bfp = unique_bfps[max_unique_idx]
-            bfp_slice = bfp_slices[max_unique_idx]
-            _unique_avail_idx = unique_avail_idxs[max_unique_idx]
-            _unique_faulty_idx = unique_faulty_idxs[max_unique_idx]
-            unique_faulty_idx = bfp_slice[0][_unique_avail_idx][_unique_faulty_idx]
-            unique_avail_idx = bfp_slice[1][_unique_avail_idx][_unique_faulty_idx]
-            assigned_faulty_routers = faulty_router_list[unique_faulty_idx]
-            assigned_avail_routers = available_router_list[unique_avail_idx]
-            # check now that for the assignments we've made, they actually
-            # use a bit-flip pattern that is available to us
-            actual_bfps = self.bit_flip_pattern_int(
-                assigned_faulty_routers, assigned_avail_routers
+                return sum(np.where(
+                    matches, bit_flip_pattern_occurences, 0
+                ))
+            num_fixed = list(map(num_fixed_for_bfp, possible_bfps))
+            idx_max_num_fixed = np.argmax(num_fixed)
+            max_bfp = possible_bfps[idx_max_num_fixed]
+            max_power_set = self.construct_power_set(picked_bit_flip_patterns + [max_bfp, ])
+            match_matrix = bit_flip_pattern_mat[None, :, :] == max_power_set[:, None, None]
+            match_matrix = functools.reduce(
+                lambda x, y: np.logical_or(x, y), match_matrix, np.full_like(bit_flip_pattern_mat, False)
             )
-            available_bfps = self.bit_flip_pattern_int([best_bfp, ], generating_set)
-            assert [bfp in available_bfps for bfp in actual_bfps]
-            picked_bit_flip_patterns.append(best_bfp)
-            repair_dict = repair_dict | dict(zip(
-                assigned_faulty_routers, assigned_avail_routers
-            ))
+            assignment_idxs = np.argwhere(match_matrix)
+            for assignment_idx in assignment_idxs:
+                faulty_idx, avail_idx = assignment_idx
+                faulty_router = faulty_router_list[faulty_idx]
+                avail_router = available_router_list[avail_idx]
+                repair_dict[faulty_router] = avail_router
             # don't need to worry anymore about reassigning these
-            faulty_router_list = np.delete(
-                faulty_router_list, unique_faulty_idx
-            )
-            available_router_list = np.delete(
-                available_router_list, unique_avail_idx
-            )
+            faulty_router_list = np.delete(faulty_router_list, assignment_idxs[:, 0])
+            available_router_list = np.delete(available_router_list, assignment_idxs[:, 1])
             if len(faulty_router_list) == 0:
                 break
         return repair_dict, picked_bit_flip_patterns
+
+    def find_generating_set(self, bit_flip_patterns):
+        if isinstance(bit_flip_patterns[0], (str, np.str_)):
+            bit_flip_patterns = [int(bfp, 2) for bfp in bit_flip_patterns]
+        basis = []
+        for a in bit_flip_patterns:
+            A = copy.deepcopy(a)
+            for b in basis:
+                # A should always decrease if the basis is sorted. If it is zero by the
+                # end of the line, then it is linearly dependent
+                A = min(A, A ^ b)
+            if A:
+                ind = 0
+                # Find the right index to insert A such that the basis remains in decreasing order
+                while ind < len(basis) and basis[ind] > A:
+                    ind += 1
+                basis.insert(ind, A)
+        basis = [bin(bfp) for bfp in basis]
+        return basis
 
     @staticmethod
     def _check_router_in_list(compare_router, router_list):
@@ -500,17 +482,17 @@ class QRAMRouter:
         new_router_list = [router[:compare_router_height] for router in router_list]
         assert compare_router in new_router_list
 
-    def construct_generating_set(self, bit_flip_patterns):
+    def construct_power_set(self, bit_flip_patterns):
         num_bit_flip_patterns = len(bit_flip_patterns)
-        generating_set = []
-        for num_patterns in range(num_bit_flip_patterns):
+        power_set = []
+        for num_patterns in range(num_bit_flip_patterns + 1):
             bit_flip_ind_combs = itertools.combinations(bit_flip_patterns, num_patterns)
             for bit_flip_ind_comb in bit_flip_ind_combs:
                 bit_flip_pattern = reduce(
                     self.bit_flip_pattern_int, bit_flip_ind_comb, 0
                 )
-                generating_set.append(bit_flip_pattern)
-        return np.unique(generating_set)
+                power_set.append(bit_flip_pattern)
+        return np.unique(power_set)
 
     def verify_allocation(self, repair_dict):
         original_tree, augmented_tree = self.assign_original_and_augmented()
@@ -552,7 +534,9 @@ class MonteCarloRouterInstances:
         _ = tree.fabrication_instance(
             self.eps, rng, top_three_functioning=self.top_three_functioning
         )
+        start_time = time.time()
         _, num_flags_global = tree.router_repair(method="global")
+        global_time = time.time() - start_time
         _, num_flags_as_you_go = tree.router_repair(method="as_you_go", start="simple_success")
         _, num_flags_enumerate = tree.router_repair(method="enumerate")
         num_faulty = tree.count_number_faulty_addresses()
@@ -562,7 +546,13 @@ class MonteCarloRouterInstances:
             _, n_success = tree.simple_reallocation(n)
             simple_success.append(int(n_success))
         return np.concatenate(
-            ([num_flags_global, num_flags_as_you_go, num_flags_enumerate, num_faulty, num_avail_all], simple_success)
+            ([num_flags_global,
+              num_flags_as_you_go,
+              num_flags_enumerate,
+              num_faulty,
+              num_avail_all,
+              global_time],
+             simple_success)
         )
 
     def run(self, num_cpus=1):
@@ -579,13 +569,15 @@ class MonteCarloRouterInstances:
         num_flags_enumerate = result[..., 2]
         num_faulty = result[..., 3]
         num_avail_all = result[..., 4]
-        n_n_success = result[..., 5:]
+        global_time = result[..., 5]
+        n_n_success = result[..., 6:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
             "num_flags_enumerate": num_flags_enumerate,
             "num_faulty": num_faulty,
             "num_avail_all": num_avail_all,
+            "global_time": global_time,
         }
         for idx, n in enumerate(range(3, self.n + 1)):
             data_dict[f"n{n}_success"] = n_n_success[..., idx]

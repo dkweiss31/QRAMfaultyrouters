@@ -461,49 +461,52 @@ class QRAMRouter:
                 faulty_router_list, available_router_list, indexing="ij"
             )
             bit_flip_pattern_mat = self.bit_flip_pattern_int(frl, arl)
-            bit_flip_patterns, bit_flip_pattern_occurences = np.unique(
-                bit_flip_pattern_mat, return_counts=True
-            )
             possible_bfps = [
                 bfp for bfp in full_power_set if bfp not in picked_power_set
             ]
 
             def num_fixed_for_bfp(possible_bfp):
+                _match_matrix = generate_match_matrix(possible_bfp)
+                # take boolean or along an axis to see how many can be fixed
+                num_avail = np.sum(np.any(_match_matrix, axis=0).astype(int))
+                num_faulty = np.sum(np.any(_match_matrix, axis=1).astype(int))
+                return min(num_avail, num_faulty)
+
+            def generate_match_matrix(possible_bfp):
                 possible_new_power_set = self.construct_power_set(
                     picked_bit_flip_patterns + [possible_bfp, ]
                 )
-                # first index is the new power set index, second is the unique bit-flip patterns we want
-                matches = bit_flip_patterns[None, :] == possible_new_power_set[:, None]
-                matches = functools.reduce(
-                    lambda x, y: np.logical_or(x, y),
-                    matches,
-                    len(bit_flip_patterns) * [False, ]
+                _match_matrix = (
+                    bit_flip_pattern_mat[None, :, :] == possible_new_power_set[:, None, None]
                 )
-                return sum(np.where(matches, bit_flip_pattern_occurences, 0))
+                _match_matrix = functools.reduce(
+                    lambda x, y: np.logical_or(x, y),
+                    _match_matrix,
+                    np.full_like(bit_flip_pattern_mat, False),
+                )
+                return _match_matrix
 
             num_fixed = list(map(num_fixed_for_bfp, possible_bfps))
             idx_max_num_fixed = np.argmax(num_fixed)
             max_bfp = possible_bfps[idx_max_num_fixed]
             picked_bit_flip_patterns.append(max_bfp)
-            max_power_set = self.construct_power_set(picked_bit_flip_patterns)
-            match_matrix = (
-                bit_flip_pattern_mat[None, :, :] == max_power_set[:, None, None]
-            )
-            match_matrix = functools.reduce(
-                lambda x, y: np.logical_or(x, y),
-                match_matrix,
-                np.full_like(bit_flip_pattern_mat, False),
-            )
+            match_matrix = generate_match_matrix(max_bfp)
             assignment_idxs = np.argwhere(match_matrix)
+            assigned_faulty_idxs, assigned_available_idxs = [], []
             for assignment_idx in assignment_idxs:
                 faulty_idx, avail_idx = assignment_idx
-                faulty_router = faulty_router_list[faulty_idx]
-                avail_router = available_router_list[avail_idx]
-                repair_dict[faulty_router] = avail_router
+                if faulty_idx in assigned_faulty_idxs or avail_idx in assigned_available_idxs:
+                    pass
+                else:
+                    faulty_router = faulty_router_list[faulty_idx]
+                    avail_router = available_router_list[avail_idx]
+                    repair_dict[faulty_router] = avail_router
+                    assigned_faulty_idxs.append(faulty_idx)
+                    assigned_available_idxs.append(avail_idx)
             # don't need to worry anymore about reassigning these
-            faulty_router_list = np.delete(faulty_router_list, assignment_idxs[:, 0])
+            faulty_router_list = np.delete(faulty_router_list, assigned_faulty_idxs)
             available_router_list = np.delete(
-                available_router_list, assignment_idxs[:, 1]
+                available_router_list, assigned_available_idxs
             )
             if len(faulty_router_list) == 0:
                 break

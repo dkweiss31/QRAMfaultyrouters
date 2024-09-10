@@ -4,7 +4,7 @@ import sys
 sys.path.append("/gpfs/gibbs/project/puri/dkw34/QRAMfaultyrouters/QRAMfaultyrouters")
 sys.path.append("/Users/danielweiss/PycharmProjects/QRAMfaultyrouters")
 from quantum_utils import generate_file_path
-from faulty_routers import MonteCarloRouterInstances
+from qram_repair import MonteCarloRouterInstances
 
 
 if __name__ == "__main__":

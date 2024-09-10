@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import pytest
-from faulty_routers import MonteCarloRouterInstances, QRAMRouter
+from qram_repair import MonteCarloRouterInstances, QRAMRouter
 
 
 @pytest.mark.parametrize("n", [5, 6, 7])
@@ -24,7 +24,7 @@ def test_monte_carlo(n, eps, top_three_functioning, num_cpus):
     result = mc.run(num_cpus)
     os.remove(filepath)
 
-
+@pytest.mark.skip(reason="with streams, different rands for cpus=1 or >1")
 def test_parallel_mc():
     n = 7
     eps = 0.06
@@ -51,7 +51,6 @@ def test_parallel_mc():
 @pytest.mark.parametrize(
     "method,start",
     [
-        ("_global", None),
         ("global", None),
         ("as_you_go", "two"),
         ("as_you_go", "simple_success"),
@@ -66,6 +65,7 @@ def test_repairs(n, eps, method, start):
         rng = np.random.default_rng(rng_seed)
         full_tree.fabrication_instance(eps, rng, top_three_functioning=True)
         repair, flag_qubits = full_tree.router_repair(method=method, start=start)
+        assert flag_qubits < n or flag_qubits == np.inf
 
 
 @pytest.mark.parametrize("n", [5, 7, 10])

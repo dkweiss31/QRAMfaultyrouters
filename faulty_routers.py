@@ -407,7 +407,8 @@ class QRAMRouter:
             num_fixed = list(map(num_fixed_for_bfp, possible_bfps))
             idx_max_num_fixed = np.argmax(num_fixed)
             max_bfp = possible_bfps[idx_max_num_fixed]
-            max_power_set = self.construct_power_set(picked_bit_flip_patterns + [max_bfp, ])
+            picked_bit_flip_patterns.append(max_bfp)
+            max_power_set = self.construct_power_set(picked_bit_flip_patterns)
             match_matrix = bit_flip_pattern_mat[None, :, :] == max_power_set[:, None, None]
             match_matrix = functools.reduce(
                 lambda x, y: np.logical_or(x, y), match_matrix, np.full_like(bit_flip_pattern_mat, False)
@@ -423,7 +424,33 @@ class QRAMRouter:
             available_router_list = np.delete(available_router_list, assignment_idxs[:, 1])
             if len(faulty_router_list) == 0:
                 break
+        all_bfps = np.unique([self.bit_flip_pattern_int(f_r, a_r) for (f_r, a_r) in repair_dict.items()])
+        assert all([not self.check_linear_independence(picked_bit_flip_patterns, bfp) for bfp in all_bfps])
         return repair_dict, picked_bit_flip_patterns
+
+    @staticmethod
+    def check_linear_independence(bfp_basis, new_bfp):
+        A = copy.deepcopy(new_bfp)
+        for b in bfp_basis:
+            # A should always decrease if the basis is sorted. If it is zero by the
+            # end of the line, then it is linearly dependent
+            A = min(A, A ^ b)
+        return True if A else False
+
+    def find_basis_of_bfps(self, bit_flip_patterns):
+        if isinstance(bit_flip_patterns[0], (str, np.str_)):
+            bit_flip_patterns = [int(bfp, 2) for bfp in bit_flip_patterns]
+        basis = []
+        for a in bit_flip_patterns:
+            linearly_independent = self.check_linear_independence(basis, a)
+            if linearly_independent:
+                ind = 0
+                # Find the right index to insert A such that the basis remains in decreasing order
+                while ind < len(basis) and basis[ind] > a:
+                    ind += 1
+                basis.insert(ind, a)
+        basis = [bin(bfp) for bfp in basis]
+        return basis
 
     @staticmethod
     def _check_router_in_list(compare_router, router_list):

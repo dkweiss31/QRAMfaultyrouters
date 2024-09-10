@@ -23,6 +23,7 @@ class QRAMRouter:
     functioning: bool
         whether or not this router is functioning
     """
+
     def __init__(
         self,
         location="0b",
@@ -55,13 +56,20 @@ class QRAMRouter:
         else:
             return self.right_child.tree_depth() + 1
 
-    def print_tree(self, indent="", am_I_a_right_or_left_child="right", print_attr="location"):
+    def print_tree(
+        self, indent="", am_I_a_right_or_left_child="right", print_attr="location"
+    ):
         """print a QRAM tree. This functionality is incredibly useful for visualizing the structure of a
         given faulty tree instance. It plots in white all of the functioning routers, in red all of the
         faulty routers and in blue all of the routers that were chosen as part of the simply-repaired subtree.
-        You can also choose to print any attribute of a QRAM tree, the default is the location"""
+        You can also choose to print any attribute of a QRAM tree, the default is the location
+        """
         if self.right_child:
-            self.right_child.print_tree(indent + "     ", am_I_a_right_or_left_child="right", print_attr=print_attr)
+            self.right_child.print_tree(
+                indent + "     ",
+                am_I_a_right_or_left_child="right",
+                print_attr=print_attr,
+            )
         print(indent, end="")
         if am_I_a_right_or_left_child == "right":
             print("┌───", end="")
@@ -77,7 +85,11 @@ class QRAMRouter:
         else:
             print(f"{Fore.RED}{getattr(self, print_attr)}{Style.RESET_ALL}")
         if self.left_child:
-            self.left_child.print_tree(indent + "     ", am_I_a_right_or_left_child="left", print_attr=print_attr)
+            self.left_child.print_tree(
+                indent + "     ",
+                am_I_a_right_or_left_child="left",
+                print_attr=print_attr,
+            )
 
     def set_attr_self_and_below(self, attr, val):
         """set attribute attr of a given router to val. Do the same for all of its children"""
@@ -87,11 +99,7 @@ class QRAMRouter:
             self.left_child.set_attr_self_and_below(attr, val)
 
     def fabrication_instance(
-        self,
-        failure_rate=0.3,
-        rng=None,
-        k_level=0,
-        top_three_functioning=False
+        self, failure_rate=0.3, rng=None, k_level=0, top_three_functioning=False
     ):
         """this function utilizes a list of random numbers (if passed) to decide
         if a given router is faulty. It strips off the first one and returns
@@ -103,10 +111,16 @@ class QRAMRouter:
             self.functioning = True
             if self.right_child:
                 rng = self.right_child.fabrication_instance(
-                    failure_rate, rng=rng, k_level=k_level+1, top_three_functioning=top_three_functioning
+                    failure_rate,
+                    rng=rng,
+                    k_level=k_level + 1,
+                    top_three_functioning=top_three_functioning,
                 )
                 rng = self.left_child.fabrication_instance(
-                    failure_rate, rng=rng, k_level=k_level+1, top_three_functioning=top_three_functioning
+                    failure_rate,
+                    rng=rng,
+                    k_level=k_level + 1,
+                    top_three_functioning=top_three_functioning,
                 )
                 return rng
             else:
@@ -122,7 +136,7 @@ class QRAMRouter:
         QRAM as well as a flag: 1 if it succeeded, 0 if it failed to find an m-bit QRAM
         """
         num_avail = self.router_list_functioning_or_not(functioning=True)
-        if len(num_avail) < 2**(m-2):
+        if len(num_avail) < 2 ** (m - 2):
             return [], 0
 
         def _simple_reallocation(m_depth, k_depth, router, existing_subtree=None):
@@ -133,40 +147,59 @@ class QRAMRouter:
             if m_depth == k_depth:
                 existing_subtree.append(router.location)
                 return existing_subtree
-            right_avail_router_list = router.right_child.router_list_functioning_or_not(functioning=True)
-            left_avail_router_list = router.left_child.router_list_functioning_or_not(functioning=True)
+            right_avail_router_list = router.right_child.router_list_functioning_or_not(
+                functioning=True
+            )
+            left_avail_router_list = router.left_child.router_list_functioning_or_not(
+                functioning=True
+            )
             num_right = len(right_avail_router_list)
             num_left = len(left_avail_router_list)
             # can succesfully split this router as enough addresses available on each side
-            if num_right >= 2**(m_depth-k_depth-1) and num_left >= 2**(m_depth-k_depth-1):
+            if num_right >= 2 ** (m_depth - k_depth - 1) and num_left >= 2 ** (
+                m_depth - k_depth - 1
+            ):
                 # try splitting this router. If we fail later on, we return here and enter the if
                 # statements below
                 try:
                     router.part_of_subtree = True
                     existing_subtree = _simple_reallocation(
-                        m_depth, k_depth + 1, router.right_child, existing_subtree=existing_subtree
+                        m_depth,
+                        k_depth + 1,
+                        router.right_child,
+                        existing_subtree=existing_subtree,
                     )
                     existing_subtree = _simple_reallocation(
-                        m_depth, k_depth + 1, router.left_child, existing_subtree=existing_subtree
+                        m_depth,
+                        k_depth + 1,
+                        router.left_child,
+                        existing_subtree=existing_subtree,
                     )
                     return existing_subtree
                 except SimpleReallocationFailure:
                     router.set_attr_self_and_below("part_of_subtree", False)
                     pass
             # check if right or left child router can serve as a level k router
-            if num_right >= 2**(m_depth - k_depth):
+            if num_right >= 2 ** (m_depth - k_depth):
                 router.part_of_subtree = True
                 existing_subtree = _simple_reallocation(
-                    m_depth, k_depth, router.right_child, existing_subtree=existing_subtree
+                    m_depth,
+                    k_depth,
+                    router.right_child,
+                    existing_subtree=existing_subtree,
                 )
                 return existing_subtree
-            if num_left >= 2**(m_depth - k_depth):
+            if num_left >= 2 ** (m_depth - k_depth):
                 router.part_of_subtree = True
                 existing_subtree = _simple_reallocation(
-                    m_depth, k_depth, router.left_child, existing_subtree=existing_subtree
+                    m_depth,
+                    k_depth,
+                    router.left_child,
+                    existing_subtree=existing_subtree,
                 )
                 return existing_subtree
             raise SimpleReallocationFailure
+
         try:
             subtree = _simple_reallocation(m, k, self)
             return subtree, 1
@@ -197,12 +230,16 @@ class QRAMRouter:
                 return 2
         else:
             if not self.functioning:
-                return 2**self.tree_depth()
+                return 2 ** self.tree_depth()
             else:
-                return (self.right_child.count_number_faulty_addresses()
-                        + self.left_child.count_number_faulty_addresses())
+                return (
+                    self.right_child.count_number_faulty_addresses()
+                    + self.left_child.count_number_faulty_addresses()
+                )
 
-    def router_list_functioning_or_not(self, functioning=False, existing_router_list=None, depth=None):
+    def router_list_functioning_or_not(
+        self, functioning=False, existing_router_list=None, depth=None
+    ):
         """function that can compute a list of faulty routers and also functioning routers
         among those at the bottom of the tree. If functioning is set to False,
         this creates a list of all non-functioning routers. If functioning is set to
@@ -221,10 +258,14 @@ class QRAMRouter:
                 return existing_router_list
         else:
             existing_router_list = self.right_child.router_list_functioning_or_not(
-                functioning=functioning, existing_router_list=existing_router_list, depth=depth-1
+                functioning=functioning,
+                existing_router_list=existing_router_list,
+                depth=depth - 1,
             )
             existing_router_list = self.left_child.router_list_functioning_or_not(
-                functioning=functioning, existing_router_list=existing_router_list, depth=depth-1
+                functioning=functioning,
+                existing_router_list=existing_router_list,
+                depth=depth - 1,
             )
             return existing_router_list
 
@@ -242,9 +283,11 @@ class QRAMRouter:
     @staticmethod
     def compute_flag_qubits(repair_dict):
         """assumption is that the keys of repair_dict are faulty routers and
-                the values are repair routers they have been assigned to"""
-        return [format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
-                for (faulty_address, repair_address) in repair_dict.items()]
+        the values are repair routers they have been assigned to"""
+        return [
+            format(int(faulty_address, 2) ^ int(repair_address, 2), "b")
+            for (faulty_address, repair_address) in repair_dict.items()
+        ]
 
     def total_flag_cost(self, repair_dict):
         unique_flag_qubits = set(self.compute_flag_qubits(repair_dict))
@@ -268,7 +311,10 @@ class QRAMRouter:
             functioning=True, depth=inter_depth
         )
 
-        for (prev_repaired_router, prev_available_router) in prev_overall_mapping_dict.items():
+        for (
+            prev_repaired_router,
+            prev_available_router,
+        ) in prev_overall_mapping_dict.items():
             for idx in ["0", "1"]:
                 # pop prev repaired faulty routers from the list, since its their
                 # mapped friends who might need repair plus new guys at the lowest level
@@ -281,32 +327,44 @@ class QRAMRouter:
                     faulty_router_list.append(prev_available_router + idx)
                 else:
                     # router is still available, get reassignment for free
-                    avail_index = available_router_list.index(prev_available_router + idx)
+                    avail_index = available_router_list.index(
+                        prev_available_router + idx
+                    )
                     available_router_list.pop(avail_index)
-                    new_overall_mapping_dict[prev_repaired_router + idx] = prev_available_router + idx
+                    new_overall_mapping_dict[prev_repaired_router + idx] = (
+                        prev_available_router + idx
+                    )
 
         if len(faulty_router_list) == 0:
             inter_repair_dict = {}
-            bfp = [0, ]
+            bfp = [
+                0,
+            ]
         else:
-            inter_repair_dict, bfp = self.router_repair_global(faulty_router_list, available_router_list)
+            inter_repair_dict, bfp = self.router_repair_global(
+                faulty_router_list, available_router_list
+            )
 
         # had to wait until we ran the global algorithm to see where these faulty
         # augmented routers got assigned
         for purgatory_router in routers_needing_reassignment:
-            prev_available_router = prev_overall_mapping_dict[purgatory_router[0: -1]]
+            prev_available_router = prev_overall_mapping_dict[purgatory_router[0:-1]]
             repaired_router = prev_available_router + purgatory_router[-1]
-            new_overall_mapping_dict[purgatory_router] = inter_repair_dict[repaired_router]
+            new_overall_mapping_dict[purgatory_router] = inter_repair_dict[
+                repaired_router
+            ]
 
         # for newly faulty routers on the original side of the tree, add them to the mapping
         for newly_faulty_router in inter_repair_dict.keys():
             if newly_faulty_router in original_faulty_router_list:
-                new_overall_mapping_dict[newly_faulty_router] = inter_repair_dict[newly_faulty_router]
+                new_overall_mapping_dict[newly_faulty_router] = inter_repair_dict[
+                    newly_faulty_router
+                ]
         return inter_repair_dict, new_overall_mapping_dict, bfp
 
     def repair_as_you_go(self, start="two"):
         """start can either be 'two' or 'simple_success'. Question is do we start with an n=2 bit QRAM
-         or do we start with the largest possible simple-repair QRAM"""
+        or do we start with the largest possible simple-repair QRAM"""
         largest_simple_repair = 2
         if start == "simple_success":
             # go up to n-2 only, don't want simple repair to steal the show
@@ -318,9 +376,15 @@ class QRAMRouter:
                     break
         original_tree, augmented_tree = self.assign_original_and_augmented()
         full_depth = self.tree_depth()
-        repair_dict_init, _, bfp_init = self._repair_as_you_go(largest_simple_repair + 1, original_tree, augmented_tree, {})
-        repair_dict_list = [repair_dict_init, ]
-        bfp_list = [bfp_init, ]
+        repair_dict_init, _, bfp_init = self._repair_as_you_go(
+            largest_simple_repair + 1, original_tree, augmented_tree, {}
+        )
+        repair_dict_list = [
+            repair_dict_init,
+        ]
+        bfp_list = [
+            bfp_init,
+        ]
         overall_mapping_dict = copy.deepcopy(repair_dict_init)
         for inter_depth in range(largest_simple_repair + 2, full_depth):
             new_repair_dict, overall_mapping_dict, bfp = self._repair_as_you_go(
@@ -342,19 +406,23 @@ class QRAMRouter:
             raise ValueError
 
     def router_repair(self, method, **kwargs):
-        """method can be 'global' or 'as_you_go' """
+        """method can be 'global' or 'as_you_go'"""
         t_depth = self.tree_depth()
         # each has depth t_depth-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
-        faulty_router_list = original_tree.router_list_functioning_or_not(functioning=False)
-        available_router_list = augmented_tree.router_list_functioning_or_not(functioning=True)
+        faulty_router_list = original_tree.router_list_functioning_or_not(
+            functioning=False
+        )
+        available_router_list = augmented_tree.router_list_functioning_or_not(
+            functioning=True
+        )
         num_faulty = len(faulty_router_list)
         if num_faulty == 0:
             # no repair necessary
             return {}, 0
         # original faulty routers + augmented faulty routers
-        total_faulty = num_faulty + 2**(t_depth-1) - len(available_router_list)
-        if total_faulty > 2**(t_depth - 1):
+        total_faulty = num_faulty + 2 ** (t_depth - 1) - len(available_router_list)
+        if total_faulty > 2 ** (t_depth - 1):
             # QRAM unrepairable
             return {}, np.inf
         if method == "global":
@@ -366,13 +434,17 @@ class QRAMRouter:
             return repair_dict_or_list, len(bfp) - 1
         elif method == "as_you_go":
             start = kwargs.get("start", "two")
-            repair_dict_or_list, overall_mapping_dict, bfp_list = self.repair_as_you_go(start=start)
+            repair_dict_or_list, overall_mapping_dict, bfp_list = self.repair_as_you_go(
+                start=start
+            )
             self.verify_allocation(overall_mapping_dict)
             return overall_mapping_dict, len(bfp_list[-1]) - 1
         elif method == "enumerate":
             repair_dict_or_list = dict(zip(faulty_router_list, available_router_list))
             # + 1 is to take care of the no error case which has to be included
-            return repair_dict_or_list, int(np.ceil(np.log2(len(faulty_router_list) + 1)))
+            return repair_dict_or_list, int(
+                np.ceil(np.log2(len(faulty_router_list) + 1))
+            )
         else:
             raise RuntimeError("method not supported")
 
@@ -392,26 +464,35 @@ class QRAMRouter:
             bit_flip_patterns, bit_flip_pattern_occurences = np.unique(
                 bit_flip_pattern_mat, return_counts=True
             )
-            possible_bfps = [bfp for bfp in full_power_set if bfp not in picked_power_set]
+            possible_bfps = [
+                bfp for bfp in full_power_set if bfp not in picked_power_set
+            ]
 
             def num_fixed_for_bfp(possible_bfp):
-                possible_new_power_set = self.construct_power_set(picked_bit_flip_patterns + [possible_bfp, ])
+                possible_new_power_set = self.construct_power_set(
+                    picked_bit_flip_patterns + [possible_bfp, ]
+                )
                 # first index is the new power set index, second is the unique bit-flip patterns we want
                 matches = bit_flip_patterns[None, :] == possible_new_power_set[:, None]
                 matches = functools.reduce(
-                    lambda x, y: np.logical_or(x, y), matches, len(bit_flip_patterns) * [False, ]
+                    lambda x, y: np.logical_or(x, y),
+                    matches,
+                    len(bit_flip_patterns) * [False, ]
                 )
-                return sum(np.where(
-                    matches, bit_flip_pattern_occurences, 0
-                ))
+                return sum(np.where(matches, bit_flip_pattern_occurences, 0))
+
             num_fixed = list(map(num_fixed_for_bfp, possible_bfps))
             idx_max_num_fixed = np.argmax(num_fixed)
             max_bfp = possible_bfps[idx_max_num_fixed]
             picked_bit_flip_patterns.append(max_bfp)
             max_power_set = self.construct_power_set(picked_bit_flip_patterns)
-            match_matrix = bit_flip_pattern_mat[None, :, :] == max_power_set[:, None, None]
+            match_matrix = (
+                bit_flip_pattern_mat[None, :, :] == max_power_set[:, None, None]
+            )
             match_matrix = functools.reduce(
-                lambda x, y: np.logical_or(x, y), match_matrix, np.full_like(bit_flip_pattern_mat, False)
+                lambda x, y: np.logical_or(x, y),
+                match_matrix,
+                np.full_like(bit_flip_pattern_mat, False),
             )
             assignment_idxs = np.argwhere(match_matrix)
             for assignment_idx in assignment_idxs:
@@ -421,11 +502,20 @@ class QRAMRouter:
                 repair_dict[faulty_router] = avail_router
             # don't need to worry anymore about reassigning these
             faulty_router_list = np.delete(faulty_router_list, assignment_idxs[:, 0])
-            available_router_list = np.delete(available_router_list, assignment_idxs[:, 1])
+            available_router_list = np.delete(
+                available_router_list, assignment_idxs[:, 1]
+            )
             if len(faulty_router_list) == 0:
                 break
-        all_bfps = np.unique([self.bit_flip_pattern_int(f_r, a_r) for (f_r, a_r) in repair_dict.items()])
-        assert all([not self.check_linear_independence(picked_bit_flip_patterns, bfp) for bfp in all_bfps])
+        all_bfps = np.unique(
+            [self.bit_flip_pattern_int(f_r, a_r) for (f_r, a_r) in repair_dict.items()]
+        )
+        assert all(
+            [
+                not self.check_linear_independence(picked_bit_flip_patterns, bfp)
+                for bfp in all_bfps
+            ]
+        )
         return repair_dict, picked_bit_flip_patterns
 
     @staticmethod
@@ -490,9 +580,15 @@ class QRAMRouter:
 
 
 class MonteCarloRouterInstances:
-    def __init__(self, n, eps, num_instances, rng_seed,
-                 top_three_functioning=False, filepath="tmp.h5py",
-                 ):
+    def __init__(
+        self,
+        n,
+        eps,
+        num_instances,
+        rng_seed,
+        top_three_functioning=False,
+        filepath="tmp.h5py",
+    ):
         self.n = n
         self.eps = eps
         self.num_instances = num_instances
@@ -513,7 +609,9 @@ class MonteCarloRouterInstances:
         start_time = time.time()
         _, num_flags_global = tree.router_repair(method="global")
         global_time = time.time() - start_time
-        _, num_flags_as_you_go = tree.router_repair(method="as_you_go", start="simple_success")
+        _, num_flags_as_you_go = tree.router_repair(
+            method="as_you_go", start="simple_success"
+        )
         _, num_flags_enumerate = tree.router_repair(method="enumerate")
         num_faulty = tree.count_number_faulty_addresses()
         num_avail_all = tree.count_available_addresses_all_levels()
@@ -522,13 +620,17 @@ class MonteCarloRouterInstances:
             _, n_success = tree.simple_reallocation(n)
             simple_success.append(int(n_success))
         return np.concatenate(
-            ([num_flags_global,
-              num_flags_as_you_go,
-              num_flags_enumerate,
-              num_faulty,
-              num_avail_all,
-              global_time],
-             simple_success)
+            (
+                [
+                    num_flags_global,
+                    num_flags_as_you_go,
+                    num_flags_enumerate,
+                    num_faulty,
+                    num_avail_all,
+                    global_time,
+                ],
+                simple_success,
+            )
         )
 
     def run(self, num_cpus=1):
@@ -537,9 +639,15 @@ class MonteCarloRouterInstances:
         streams = parent_rng.spawn(self.num_instances)
         idxs_and_streams = list(zip(np.arange(self.num_instances), streams))
         map_fun = functools.partial(parallel_map, num_cpus)
-        result = unpack_param_map(param_map(
-            self.run_for_one_tree, [idxs_and_streams, ], map_fun=map_fun
-        )).astype(float)
+        result = unpack_param_map(
+            param_map(
+                self.run_for_one_tree,
+                [
+                    idxs_and_streams,
+                ],
+                map_fun=map_fun,
+            )
+        ).astype(float)
         num_flags_global = result[..., 0]
         num_flags_as_you_go = result[..., 1]
         num_flags_enumerate = result[..., 2]
@@ -566,7 +674,7 @@ class AnalyticUnrepair:
     def __init__(self, eps):
         self.eps = eps
         self.saved_add_available = {
-            "P_2_0": self.eps + (1 - self.eps) * eps ** 2,
+            "P_2_0": self.eps + (1 - self.eps) * eps**2,
             "P_2_1": 0.0,
             "P_2_2": 2.0 * self.eps * (1 - self.eps) ** 2,
             "P_2_3": 0.0,
@@ -578,10 +686,12 @@ class AnalyticUnrepair:
             return 0.0
         if f"P_{n}_{ell}" in self.saved_add_available:
             return self.saved_add_available[f"P_{n}_{ell}"]
-        P_n_ell = sum((1 - self.eps)
-                      * self.prob_ell_available(n - 1, m)
-                      * self.prob_ell_available(n - 1, ell - m)
-                      for m in range(2 ** (n - 1) + 1))
+        P_n_ell = sum(
+            (1 - self.eps)
+            * self.prob_ell_available(n - 1, m)
+            * self.prob_ell_available(n - 1, ell - m)
+            for m in range(2 ** (n - 1) + 1)
+        )
         if ell == 0:
             P_n_ell += self.eps
         self.saved_add_available[f"P_{n}_{ell}"] = P_n_ell
@@ -593,4 +703,5 @@ class AnalyticUnrepair:
 
 class SimpleReallocationFailure(Exception):
     """Raised when the simple reallocaion fails at runtime"""
+
     pass

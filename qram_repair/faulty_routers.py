@@ -611,10 +611,11 @@ class MonteCarloRouterInstances:
         )
         start_time = time.time()
         _, num_flags_global = tree.router_repair(method="global")
-        global_time = time.time() - start_time
+        global_time = time.time()
         _, num_flags_as_you_go = tree.router_repair(
             method="as_you_go", start="simple_success"
         )
+        as_you_go_time = time.time()
         _, num_flags_enumerate = tree.router_repair(method="enumerate")
         num_faulty = tree.count_number_faulty_addresses()
         num_avail_all = tree.count_available_addresses_all_levels()
@@ -630,7 +631,8 @@ class MonteCarloRouterInstances:
                     num_flags_enumerate,
                     num_faulty,
                     num_avail_all,
-                    global_time,
+                    global_time - start_time,
+                    as_you_go_time - global_time,
                 ],
                 simple_success,
             )
@@ -657,7 +659,8 @@ class MonteCarloRouterInstances:
         num_faulty = result[..., 3]
         num_avail_all = result[..., 4]
         global_time = result[..., 5]
-        n_n_success = result[..., 6:]
+        as_you_go_time = result[..., 6]
+        n_n_success = result[..., 7:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
@@ -665,6 +668,7 @@ class MonteCarloRouterInstances:
             "num_faulty": num_faulty,
             "num_avail_all": num_avail_all,
             "global_time": global_time,
+            "as_you_go_time": as_you_go_time,
         }
         for idx, n in enumerate(range(3, self.n + 1)):
             data_dict[f"n{n}_success"] = n_n_success[..., idx]

@@ -447,8 +447,27 @@ class QRAMRouter:
             self.verify_allocation(overall_mapping_dict)
             num_bfps = [len(_bfps) for _bfps in bfp_list]
             return overall_mapping_dict, max(num_bfps) - 1, total_check_p_time, total_argmax_time
+        elif method == "brute_force":
+            repair_dict_or_list, bfp = self.router_repair_brute_force(
+                faulty_router_list, available_router_list,
+            )
+            self.verify_allocation(repair_dict_or_list)
+            return repair_dict_or_list, len(bfp), 0.0, 0.0
         else:
             raise RuntimeError("method not supported")
+
+    def router_repair_brute_force(self, faulty_router_list, available_router_list):
+        min_bfp = np.inf
+        faulty_router_list = np.array(faulty_router_list)
+        available_router_list = np.array(available_router_list)
+        all_possible_permutations = itertools.permutations(available_router_list, len(available_router_list))
+        for permutation in all_possible_permutations:
+            bit_flip_patterns = self.bit_flip_pattern_int(*list(zip(*zip(faulty_router_list, permutation))))
+            unique_bfps = np.unique(bit_flip_patterns)
+            if len(unique_bfps) < min_bfp:
+                repair_dict = dict(zip(faulty_router_list, permutation))
+                picked_bfps = unique_bfps
+        return repair_dict, picked_bfps
 
     def router_repair_global(self, faulty_router_list, available_router_list, num_cpus=1):
         faulty_router_list = np.array(faulty_router_list)
@@ -610,7 +629,7 @@ class MonteCarloRouterInstances:
     def param_dict(self):
         return {k: v for k, v in self.__dict__.items() if k in self._init_attrs}
 
-    def run_for_one_tree(self, idx_and_rng, num_cpus=1):
+    def run_for_one_tree(self, idx_and_rng, num_cpus=1, run_brute_force=False):
         idx, rng = idx_and_rng[0]
         tree = QRAMRouter().create_tree(self.n)
         _ = tree.fabrication_instance(
@@ -623,6 +642,11 @@ class MonteCarloRouterInstances:
             method="as_you_go", start="simple_success", num_cpus=num_cpus
         )
         as_you_go_time = time.time()
+        if run_brute_force:
+            _, num_flags_brute_force, _, _ = tree.router_repair(method="brute_force")
+        else:
+            num_flags_brute_force = np.inf
+        brute_force_time = time.time()
         num_faulty = tree.count_number_faulty_addresses()
         num_avail_all = tree.count_available_addresses_all_levels()
         simple_success = []
@@ -634,6 +658,7 @@ class MonteCarloRouterInstances:
                 [
                     num_flags_global,
                     num_flags_as_you_go,
+                    num_flags_brute_force,
                     num_faulty,
                     num_avail_all,
                     global_time - start_time,
@@ -642,12 +667,13 @@ class MonteCarloRouterInstances:
                     as_you_go_time - global_time,
                     check_p_time_as_you_go,
                     argmax_time_as_you_go,
+                    brute_force_time - as_you_go_time,
                 ],
                 simple_success,
             )
         )
 
-    def run(self, num_cpus=1):
+    def run(self, num_cpus=1, run_brute_force=False):
         print(f"running faulty QRAM simulation with {self.__dict__}")
         parent_rng = np.random.default_rng(self.rng_seed)
         streams = parent_rng.spawn(self.num_instances)
@@ -655,7 +681,9 @@ class MonteCarloRouterInstances:
         # hardcode that should map serially over instances, parrallelize over
         # internals
         map_fun = functools.partial(parallel_map, 1)
-        run_fun = functools.partial(self.run_for_one_tree, num_cpus=num_cpus)
+        run_fun = functools.partial(
+            self.run_for_one_tree, num_cpus=num_cpus, run_brute_force=run_brute_force
+        )
         result = unpack_param_map(
             param_map(
                 run_fun,
@@ -667,18 +695,21 @@ class MonteCarloRouterInstances:
         ).astype(float)
         num_flags_global = result[..., 0]
         num_flags_as_you_go = result[..., 1]
-        num_faulty = result[..., 2]
-        num_avail_all = result[..., 3]
-        global_time = result[..., 4]
-        check_p_time_global = result[..., 5]
-        argmax_time_global = result[..., 6]
-        as_you_go_time = result[..., 7]
-        check_p_time_as_you_go = result[..., 8]
-        argmax_time_as_you_go = result[..., 9]
-        n_n_success = result[..., 10:]
+        num_flags_brute_force = result[..., 2]
+        num_faulty = result[..., 3]
+        num_avail_all = result[..., 4]
+        global_time = result[..., 5]
+        check_p_time_global = result[..., 6]
+        argmax_time_global = result[..., 7]
+        as_you_go_time = result[..., 8]
+        check_p_time_as_you_go = result[..., 9]
+        argmax_time_as_you_go = result[..., 10]
+        brute_force_time = result[..., 11]
+        n_n_success = result[..., 12:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
+            "num_flags_brute_force": num_flags_brute_force,
             "num_faulty": num_faulty,
             "num_avail_all": num_avail_all,
             "global_time": global_time,
@@ -687,6 +718,7 @@ class MonteCarloRouterInstances:
             "as_you_go_time": as_you_go_time,
             "check_p_time_as_you_go": check_p_time_as_you_go,
             "argmax_time_as_you_go": argmax_time_as_you_go,
+            "brute_force_time": brute_force_time,
         }
         for idx, n in enumerate(range(3, self.n + 1)):
             data_dict[f"n{n}_success"] = n_n_success[..., idx]

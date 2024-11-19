@@ -12,10 +12,10 @@ if __name__ == "__main__":
         description="run monte carlo instances of faulty routers"
     )
     parser.add_argument("--idx", default=-1, type=int, help="idx to scan over")
-    parser.add_argument("--n", default=3, type=int, help="tree depth")
-    parser.add_argument("--eps", default=0.01, type=float, help="failure rate")
+    parser.add_argument("--n", default=5, type=int, help="tree depth")
+    parser.add_argument("--eps", default=0.04, type=float, help="failure rate")
     parser.add_argument(
-        "--num_instances", default=100000, type=int, help="number monte carlo instances"
+        "--num_instances", default=10000, type=int, help="number monte carlo instances"
     )
     parser.add_argument("--rng_seed", default=4674, type=int, help="rng seed")
     parser.add_argument(
@@ -24,6 +24,7 @@ if __name__ == "__main__":
         type=int,
         help="whether or not the top three routers should always be functioning",
     )
+    parser.add_argument("--run_brute_force", default=1, type=int, help="run brute force optimization")
     parser.add_argument("--num_cpus", default=1, type=int, help="number of cpus")
     args = parser.parse_args()
     if args.idx == -1:
@@ -42,4 +43,4 @@ if __name__ == "__main__":
         top_three_functioning=args.top_three_functioning,
         filepath=filename,
     )
-    mcinstance.run(num_cpus=args.num_cpus)
+    mcinstance.run(num_cpus=args.num_cpus, run_brute_force=args.run_brute_force)

@@ -300,6 +300,7 @@ class QRAMRouter:
         original_tree,
         augmented_tree,
         prev_overall_mapping_dict,
+        num_cpus=1,
     ):
         new_overall_mapping_dict = {}
         routers_needing_reassignment = []
@@ -340,9 +341,11 @@ class QRAMRouter:
             bfp = [
                 0,
             ]
+            total_check_p_time = 0.0
+            total_argmax_time = 0.0
         else:
-            inter_repair_dict, bfp = self.router_repair_global(
-                faulty_router_list, available_router_list
+            inter_repair_dict, bfp, total_check_p_time, total_argmax_time = self.router_repair_global(
+                faulty_router_list, available_router_list, num_cpus=num_cpus,
             )
 
         # had to wait until we ran the global algorithm to see where these faulty
@@ -360,9 +363,9 @@ class QRAMRouter:
                 new_overall_mapping_dict[newly_faulty_router] = inter_repair_dict[
                     newly_faulty_router
                 ]
-        return inter_repair_dict, new_overall_mapping_dict, bfp
+        return inter_repair_dict, new_overall_mapping_dict, bfp, total_check_p_time, total_argmax_time
 
-    def repair_as_you_go(self, start="two"):
+    def repair_as_you_go(self, start="two", num_cpus=1):
         """start can either be 'two' or 'simple_success'. Question is do we start with an n=2 bit QRAM
         or do we start with the largest possible simple-repair QRAM"""
         largest_simple_repair = 2
@@ -376,8 +379,8 @@ class QRAMRouter:
                     break
         original_tree, augmented_tree = self.assign_original_and_augmented()
         full_depth = self.tree_depth()
-        repair_dict_init, _, bfp_init = self._repair_as_you_go(
-            largest_simple_repair + 1, original_tree, augmented_tree, {}
+        repair_dict_init, _, bfp_init, total_check_p_time, total_argmax_time = self._repair_as_you_go(
+            largest_simple_repair + 1, original_tree, augmented_tree, {}, num_cpus=num_cpus,
         )
         repair_dict_list = [
             repair_dict_init,
@@ -387,12 +390,14 @@ class QRAMRouter:
         ]
         overall_mapping_dict = copy.deepcopy(repair_dict_init)
         for inter_depth in range(largest_simple_repair + 2, full_depth):
-            new_repair_dict, overall_mapping_dict, bfp = self._repair_as_you_go(
-                inter_depth, original_tree, augmented_tree, overall_mapping_dict
+            new_repair_dict, overall_mapping_dict, bfp, _total_check_p_time, _total_argmax_time = self._repair_as_you_go(
+                inter_depth, original_tree, augmented_tree, overall_mapping_dict, num_cpus=num_cpus,
             )
             repair_dict_list.append(new_repair_dict)
             bfp_list.append(bfp)
-        return repair_dict_list, overall_mapping_dict, bfp_list
+            total_check_p_time += _total_check_p_time
+            total_argmax_time += _total_argmax_time
+        return repair_dict_list, overall_mapping_dict, bfp_list, total_check_p_time, total_argmax_time
 
     @staticmethod
     @np.vectorize
@@ -419,42 +424,41 @@ class QRAMRouter:
         num_faulty = len(faulty_router_list)
         if num_faulty == 0:
             # no repair necessary
-            return {}, 0
+            return {}, 0, 0.0, 0.0
         # original faulty routers + augmented faulty routers
         total_faulty = num_faulty + 2 ** (t_depth - 1) - len(available_router_list)
         if total_faulty > 2 ** (t_depth - 1):
             # QRAM unrepairable
-            return {}, np.inf
+            return {}, np.inf, 0.0, 0.0
         if method == "global":
-            repair_dict_or_list, bfp = self.router_repair_global(
-                faulty_router_list, available_router_list
+            num_cpus = kwargs.get("num_cpus", 1)
+            repair_dict_or_list, bfp, total_check_p_time, total_argmax_time = self.router_repair_global(
+                faulty_router_list, available_router_list, num_cpus=num_cpus
             )
             self.verify_allocation(repair_dict_or_list)
             # -1 to take care of 0 bfp, which doesn't cost a flag qubit
-            return repair_dict_or_list, len(bfp) - 1
+            return repair_dict_or_list, len(bfp) - 1, total_check_p_time, total_argmax_time
         elif method == "as_you_go":
             start = kwargs.get("start", "two")
-            repair_dict_or_list, overall_mapping_dict, bfp_list = self.repair_as_you_go(
-                start=start
+            num_cpus = kwargs.get("num_cpus", 1)
+            repair_dict_or_list, overall_mapping_dict, bfp_list, total_check_p_time, total_argmax_time = self.repair_as_you_go(
+                start=start, num_cpus=num_cpus
             )
             self.verify_allocation(overall_mapping_dict)
-            return overall_mapping_dict, len(bfp_list[-1]) - 1
-        elif method == "enumerate":
-            repair_dict_or_list = dict(zip(faulty_router_list, available_router_list))
-            # + 1 is to take care of the no error case which has to be included
-            return repair_dict_or_list, int(
-                np.ceil(np.log2(len(faulty_router_list) + 1))
-            )
+            num_bfps = [len(_bfps) for _bfps in bfp_list]
+            return overall_mapping_dict, max(num_bfps) - 1, total_check_p_time, total_argmax_time
         else:
             raise RuntimeError("method not supported")
 
-    def router_repair_global(self, faulty_router_list, available_router_list):
+    def router_repair_global(self, faulty_router_list, available_router_list, num_cpus=1):
         faulty_router_list = np.array(faulty_router_list)
         available_router_list = np.array(available_router_list)
         repair_dict = {}
         picked_bit_flip_patterns = [0, ]
         full_basis = [2**idx for idx in range(len(faulty_router_list[0]) - 2)]
         full_power_set = self.construct_power_set(full_basis)
+        total_check_p_time = 0.0
+        total_argmax_time = 0.0
         while True:
             picked_power_set = self.construct_power_set(picked_bit_flip_patterns)
             frl, arl = np.meshgrid(
@@ -485,9 +489,12 @@ class QRAMRouter:
                     np.full_like(bit_flip_pattern_mat, False),
                 )
                 return _match_matrix
-
-            num_fixed = list(map(num_fixed_for_bfp, possible_bfps))
+            start_time = time.time()
+            num_fixed = list(parallel_map(num_cpus, num_fixed_for_bfp, possible_bfps))
+            check_p_time = time.time()
+            total_check_p_time += check_p_time - start_time
             idx_max_num_fixed = np.argmax(num_fixed)
+            total_argmax_time += time.time() - check_p_time
             max_bfp = possible_bfps[idx_max_num_fixed]
             picked_bit_flip_patterns.append(max_bfp)
             match_matrix = generate_match_matrix(max_bfp)
@@ -519,7 +526,7 @@ class QRAMRouter:
                 for bfp in all_bfps
             ]
         )
-        return repair_dict, picked_bit_flip_patterns
+        return repair_dict, picked_bit_flip_patterns, total_check_p_time, total_argmax_time
 
     @staticmethod
     def check_linear_independence(bfp_basis, new_bfp):
@@ -603,20 +610,19 @@ class MonteCarloRouterInstances:
     def param_dict(self):
         return {k: v for k, v in self.__dict__.items() if k in self._init_attrs}
 
-    def run_for_one_tree(self, idx_and_rng):
+    def run_for_one_tree(self, idx_and_rng, num_cpus=1):
         idx, rng = idx_and_rng[0]
         tree = QRAMRouter().create_tree(self.n)
         _ = tree.fabrication_instance(
             self.eps, rng, top_three_functioning=self.top_three_functioning
         )
         start_time = time.time()
-        _, num_flags_global = tree.router_repair(method="global")
+        _, num_flags_global, check_p_time_global, argmax_time_global = tree.router_repair(method="global", num_cpus=num_cpus)
         global_time = time.time()
-        _, num_flags_as_you_go = tree.router_repair(
-            method="as_you_go", start="simple_success"
+        _, num_flags_as_you_go, check_p_time_as_you_go, argmax_time_as_you_go = tree.router_repair(
+            method="as_you_go", start="simple_success", num_cpus=num_cpus
         )
         as_you_go_time = time.time()
-        _, num_flags_enumerate = tree.router_repair(method="enumerate")
         num_faulty = tree.count_number_faulty_addresses()
         num_avail_all = tree.count_available_addresses_all_levels()
         simple_success = []
@@ -628,11 +634,14 @@ class MonteCarloRouterInstances:
                 [
                     num_flags_global,
                     num_flags_as_you_go,
-                    num_flags_enumerate,
                     num_faulty,
                     num_avail_all,
                     global_time - start_time,
+                    check_p_time_global,
+                    argmax_time_global,
                     as_you_go_time - global_time,
+                    check_p_time_as_you_go,
+                    argmax_time_as_you_go,
                 ],
                 simple_success,
             )
@@ -643,10 +652,13 @@ class MonteCarloRouterInstances:
         parent_rng = np.random.default_rng(self.rng_seed)
         streams = parent_rng.spawn(self.num_instances)
         idxs_and_streams = list(zip(np.arange(self.num_instances), streams))
-        map_fun = functools.partial(parallel_map, num_cpus)
+        # hardcode that should map serially over instances, parrallelize over
+        # internals
+        map_fun = functools.partial(parallel_map, 1)
+        run_fun = functools.partial(self.run_for_one_tree, num_cpus=num_cpus)
         result = unpack_param_map(
             param_map(
-                self.run_for_one_tree,
+                run_fun,
                 [
                     idxs_and_streams,
                 ],
@@ -655,20 +667,26 @@ class MonteCarloRouterInstances:
         ).astype(float)
         num_flags_global = result[..., 0]
         num_flags_as_you_go = result[..., 1]
-        num_flags_enumerate = result[..., 2]
-        num_faulty = result[..., 3]
-        num_avail_all = result[..., 4]
-        global_time = result[..., 5]
-        as_you_go_time = result[..., 6]
-        n_n_success = result[..., 7:]
+        num_faulty = result[..., 2]
+        num_avail_all = result[..., 3]
+        global_time = result[..., 4]
+        check_p_time_global = result[..., 5]
+        argmax_time_global = result[..., 6]
+        as_you_go_time = result[..., 7]
+        check_p_time_as_you_go = result[..., 8]
+        argmax_time_as_you_go = result[..., 9]
+        n_n_success = result[..., 10:]
         data_dict = {
             "num_flags_global": num_flags_global,
             "num_flags_as_you_go": num_flags_as_you_go,
-            "num_flags_enumerate": num_flags_enumerate,
             "num_faulty": num_faulty,
             "num_avail_all": num_avail_all,
             "global_time": global_time,
+            "check_p_time_global": check_p_time_global,
+            "argmax_time_global": argmax_time_global,
             "as_you_go_time": as_you_go_time,
+            "check_p_time_as_you_go": check_p_time_as_you_go,
+            "argmax_time_as_you_go": argmax_time_as_you_go,
         }
         for idx, n in enumerate(range(3, self.n + 1)):
             data_dict[f"n{n}_success"] = n_n_success[..., idx]

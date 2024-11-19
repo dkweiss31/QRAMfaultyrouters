@@ -42,4 +42,4 @@ if __name__ == "__main__":
         top_three_functioning=args.top_three_functioning,
         filepath=filename,
     )
-    mcinstance.run(args.num_cpus)
+    mcinstance.run(num_cpus=args.num_cpus)

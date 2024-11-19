@@ -46,7 +46,7 @@ def test_parallel_mc():
         assert np.allclose(val_lin, val_par)
 
 
-@pytest.mark.parametrize("n", [6, 8, 10])
+@pytest.mark.parametrize("n", [4, 6, 8])
 @pytest.mark.parametrize("eps", [0.01, 0.04, 0.08])
 @pytest.mark.parametrize(
     "method,start",
@@ -64,7 +64,7 @@ def test_repairs(n, eps, method, start):
         rng_seed = 2545685 * n + 2667485973 * instance + 2674
         rng = np.random.default_rng(rng_seed)
         full_tree.fabrication_instance(eps, rng, top_three_functioning=True)
-        repair, flag_qubits = full_tree.router_repair(method=method, start=start)
+        repair, flag_qubits, _, _ = full_tree.router_repair(method=method, start=start)
         assert flag_qubits < n or flag_qubits == np.inf
 
 

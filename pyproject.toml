@@ -7,6 +7,8 @@ dependencies = [
     "numpy",
     "matplotlib",
     "colorama",
+    "pathos",
+    "h5py",
 ]
 
 [build-system]

@@ -8,7 +8,7 @@ import numpy as np
 from colorama import Fore, Style
 from colorama import init as colorama_init
 
-from quantum_utils import write_to_h5, param_map, unpack_param_map, parallel_map
+from .utils import parallel_map, param_map, unpack_param_map, write_to_h5
 
 colorama_init()
 

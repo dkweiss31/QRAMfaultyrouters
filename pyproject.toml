@@ -31,7 +31,6 @@ extend-include = ["*.ipynb"]
 exclude = ["examples/*.py", "examples/*.ipynb"]
 
 [tool.ruff.format]
-quote-style = "single"
 docstring-code-format = true
 skip-magic-trailing-comma = true
 

@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import pytest
+
 from qram_repair import MonteCarloRouterInstances, QRAMRouter
 
 
@@ -14,15 +15,11 @@ def test_monte_carlo(n, eps, top_three_functioning, num_cpus):
     rng_seed = 2545685
     filepath = "tmp.h5py"
     mc = MonteCarloRouterInstances(
-        n,
-        eps,
-        num_instances,
-        rng_seed,
-        top_three_functioning,
-        filepath,
+        n, eps, num_instances, rng_seed, top_three_functioning, filepath
     )
     result = mc.run(num_cpus)
     os.remove(filepath)
+
 
 @pytest.mark.skip(reason="with streams, different rands for cpus=1 or >1")
 def test_parallel_mc():
@@ -33,12 +30,7 @@ def test_parallel_mc():
     top_three_functioning = True
     filepath = "tmp.h5py"
     mc = MonteCarloRouterInstances(
-        n,
-        eps,
-        num_instances,
-        rng_seed,
-        top_three_functioning,
-        filepath,
+        n, eps, num_instances, rng_seed, top_three_functioning, filepath
     )
     result_lin = mc.run(num_cpus=1)
     result_par = mc.run(num_cpus=4)
@@ -50,11 +42,7 @@ def test_parallel_mc():
 @pytest.mark.parametrize("eps", [0.01, 0.04, 0.08])
 @pytest.mark.parametrize(
     "method,start",
-    [
-        ("global", None),
-        ("as_you_go", "two"),
-        ("as_you_go", "simple_success"),
-    ],
+    [("global", None), ("as_you_go", "two"), ("as_you_go", "simple_success")],
 )
 def test_repairs(n, eps, method, start):
     num_instances = 1000
@@ -67,7 +55,9 @@ def test_repairs(n, eps, method, start):
         repair, flag_qubits, _, _ = full_tree.router_repair(method=method, start=start)
         assert flag_qubits < n or flag_qubits == np.inf
         if n <= 4:
-            repair_brute, flag_brute, _, _ = full_tree.router_repair(method="brute_force")
+            repair_brute, flag_brute, _, _ = full_tree.router_repair(
+                method="brute_force"
+            )
             assert flag_brute <= flag_qubits
 
 

@@ -4,8 +4,8 @@ import sys
 sys.path.append("/gpfs/gibbs/project/puri/dkw34/QRAMfaultyrouters/QRAMfaultyrouters")
 sys.path.append("/Users/danielweiss/PycharmProjects/QRAMfaultyrouters")
 from quantum_utils import generate_file_path
-from qram_repair import MonteCarloRouterInstances
 
+from qram_repair import MonteCarloRouterInstances
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -24,7 +24,9 @@ if __name__ == "__main__":
         type=int,
         help="whether or not the top three routers should always be functioning",
     )
-    parser.add_argument("--run_brute_force", default=1, type=int, help="run brute force optimization")
+    parser.add_argument(
+        "--run_brute_force", default=0, type=int, help="run brute force optimization"
+    )
     parser.add_argument("--num_cpus", default=1, type=int, help="number of cpus")
     args = parser.parse_args()
     if args.idx == -1:

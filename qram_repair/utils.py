@@ -5,6 +5,15 @@ import numpy as np
 import pathos
 
 
+def extract_info_from_h5(filepath):
+    data_dict = {}
+    with h5py.File(filepath, "r") as f:
+        for key in f.keys():
+            data_dict[key] = f[key][()]
+        param_dict = dict(f.attrs.items())
+    return data_dict, param_dict
+
+
 def write_to_h5(filepath, data_dict, param_dict):
     with h5py.File(filepath, "w") as f:
         for key, val in data_dict.items():

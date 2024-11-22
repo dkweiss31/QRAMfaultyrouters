@@ -772,36 +772,5 @@ class MonteCarloRouterInstances:
         return data_dict
 
 
-class AnalyticUnrepair:
-    def __init__(self, eps):
-        self.eps = eps
-        self.saved_add_available = {
-            "P_2_0": self.eps + (1 - self.eps) * eps**2,
-            "P_2_1": 0.0,
-            "P_2_2": 2.0 * self.eps * (1 - self.eps) ** 2,
-            "P_2_3": 0.0,
-            "P_2_4": (1 - self.eps) ** 3,
-        }
-
-    def prob_ell_available(self, n, ell):
-        if ell < 0 or ell > 2**n:
-            return 0.0
-        if f"P_{n}_{ell}" in self.saved_add_available:
-            return self.saved_add_available[f"P_{n}_{ell}"]
-        P_n_ell = sum(
-            (1 - self.eps)
-            * self.prob_ell_available(n - 1, m)
-            * self.prob_ell_available(n - 1, ell - m)
-            for m in range(2 ** (n - 1) + 1)
-        )
-        if ell == 0:
-            P_n_ell += self.eps
-        self.saved_add_available[f"P_{n}_{ell}"] = P_n_ell
-        return P_n_ell
-
-    def prob_unrepairable(self, n):
-        return sum(self.prob_ell_available(n, ell) for ell in range(2 ** (n - 1)))
-
-
 class SimpleReallocationFailure(Exception):
     """Raised when the simple reallocaion fails at runtime"""

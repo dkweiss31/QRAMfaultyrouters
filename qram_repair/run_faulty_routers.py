@@ -11,11 +11,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="run monte carlo instances of faulty routers"
     )
-    parser.add_argument("--idx", default=-1, type=int, help="idx to scan over")
+    parser.add_argument(
+        "--idx",
+        default=-1,
+        type=int,
+        help="if -1, automatically generate a new file number for saving. Otherwise, "
+        "use the passed number.",
+    )
     parser.add_argument("--n", default=5, type=int, help="tree depth")
     parser.add_argument("--eps", default=0.04, type=float, help="failure rate")
     parser.add_argument(
-        "--num_instances", default=10000, type=int, help="number monte carlo instances"
+        "--num_instances",
+        default=10000,
+        type=int,
+        help="number of monte carlo instances",
     )
     parser.add_argument("--rng_seed", default=4674, type=int, help="rng seed")
     parser.add_argument(
@@ -41,7 +50,7 @@ if __name__ == "__main__":
         args.n,
         args.eps,
         num_instances=args.num_instances,
-        rng_seed=args.rng_seed * args.n + 267483,
+        rng_seed=args.rng_seed,
         top_three_functioning=args.top_three_functioning,
         filepath=filename,
     )

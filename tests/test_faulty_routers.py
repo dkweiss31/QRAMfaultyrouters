@@ -42,7 +42,7 @@ def test_parallel_mc():
 @pytest.mark.parametrize("eps", [0.01, 0.04, 0.08])
 @pytest.mark.parametrize(
     "method,start",
-    [("global", None), ("as_you_go", "two"), ("as_you_go", "simple_success")],
+    [("last_layer", None), ("iterative", "two"), ("iterative", "simple_success")],
 )
 def test_repairs(n, eps, method, start):
     num_instances = 1000
@@ -98,12 +98,10 @@ def test_specific_faulty_tree():
     faulty_tree = QRAMRouter()
     faulty_tree = faulty_tree.create_tree(n)
     faulty_tree.fabrication_instance(eps, rng, top_three_functioning=True)
-    assignment_global, flag_qubits_global = faulty_tree.router_repair(method="global")
-    assignment_as_you_go, flag_qubits_as_you_go = faulty_tree.router_repair(
-        method="as_you_go"
+    assignment_last_layer, flag_qubits_last_layer, _, _ = faulty_tree.router_repair(
+        method="last_layer"
     )
-    assignment_enumerate, flag_qubits_enumerate = faulty_tree.router_repair(
-        method="enumerate"
+    assignment_iterative, flag_qubits_iterative, _, _ = faulty_tree.router_repair(
+        method="iterative"
     )
-    assert flag_qubits_global == flag_qubits_as_you_go == 1
-    assert flag_qubits_enumerate == 2
+    assert flag_qubits_last_layer == flag_qubits_iterative == 1

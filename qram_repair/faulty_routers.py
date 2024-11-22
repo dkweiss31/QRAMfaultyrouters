@@ -125,7 +125,7 @@ class QRAMRouter:
         self.set_attr_self_and_below("functioning", False)
         return rng
 
-    def simple_reallocation(self, m, k=1):
+    def relabel_repair(self, m, k=1):
         """m is the depth of the QRAM we are after, and k is the level of the QRAM this
         router should be acting as
         returns the routers at the bottom of the tree that are part of the m-bit
@@ -286,7 +286,7 @@ class QRAMRouter:
         num_bit_flips = [sum(map(int, flag)) for flag in unique_flag_qubits]
         return sum(num_bit_flips)
 
-    def _repair_as_you_go(
+    def _iterative_repair(
         self,
         inter_depth,
         original_tree,
@@ -335,12 +335,12 @@ class QRAMRouter:
             total_argmax_time = 0.0
         else:
             inter_repair_dict, bfp, total_check_p_time, total_argmax_time = (
-                self.router_repair_global(
+                self.flag_qubit_minimization(
                     faulty_router_list, available_router_list, num_cpus=num_cpus
                 )
             )
 
-        # had to wait until we ran the global algorithm to see where these faulty
+        # had to wait until we ran the flag_qubit_minimization algorithm to see where these faulty
         # augmented routers got assigned
         for purgatory_router in routers_needing_reassignment:
             prev_available_router = prev_overall_mapping_dict[purgatory_router[0:-1]]
@@ -363,7 +363,7 @@ class QRAMRouter:
             total_argmax_time,
         )
 
-    def repair_as_you_go(self, start="two", num_cpus=1):
+    def iterative_repair(self, start="two", num_cpus=1):
         """Start can either be 'two' or 'simple_success'. Question is do we start with an n=2 bit QRAM
         or do we start with the largest possible simple-repair QRAM
         """
@@ -371,7 +371,7 @@ class QRAMRouter:
         if start == "simple_success":
             # go up to n-2 only, don't want simple repair to steal the show
             for tree_depth in range(2, self.tree_depth() - 1):
-                _, simple_success = self.simple_reallocation(tree_depth)
+                _, simple_success = self.relabel_repair(tree_depth)
                 if simple_success:
                     largest_simple_repair = tree_depth
                 else:
@@ -379,7 +379,7 @@ class QRAMRouter:
         original_tree, augmented_tree = self.assign_original_and_augmented()
         full_depth = self.tree_depth()
         repair_dict_init, _, bfp_init, total_check_p_time, total_argmax_time = (
-            self._repair_as_you_go(
+            self._iterative_repair(
                 largest_simple_repair + 1,
                 original_tree,
                 augmented_tree,
@@ -397,7 +397,7 @@ class QRAMRouter:
                 bfp,
                 _total_check_p_time,
                 _total_argmax_time,
-            ) = self._repair_as_you_go(
+            ) = self._iterative_repair(
                 inter_depth,
                 original_tree,
                 augmented_tree,
@@ -427,7 +427,7 @@ class QRAMRouter:
         raise ValueError
 
     def router_repair(self, method, **kwargs):
-        """Method can be 'global' or 'as_you_go'"""
+        """Method can be 'last_layer' or 'iterative'"""
         t_depth = self.tree_depth()
         # each has depth t_depth-1
         original_tree, augmented_tree = self.assign_original_and_augmented()
@@ -446,10 +446,10 @@ class QRAMRouter:
         if total_faulty > 2 ** (t_depth - 1):
             # QRAM unrepairable
             return {}, np.inf, 0.0, 0.0
-        if method == "global":
+        if method == "last_layer":
             num_cpus = kwargs.get("num_cpus", 1)
             repair_dict_or_list, bfp, total_check_p_time, total_argmax_time = (
-                self.router_repair_global(
+                self.flag_qubit_minimization(
                     faulty_router_list, available_router_list, num_cpus=num_cpus
                 )
             )
@@ -461,7 +461,7 @@ class QRAMRouter:
                 total_check_p_time,
                 total_argmax_time,
             )
-        if method == "as_you_go":
+        if method == "iterative":
             start = kwargs.get("start", "two")
             num_cpus = kwargs.get("num_cpus", 1)
             (
@@ -470,7 +470,7 @@ class QRAMRouter:
                 bfp_list,
                 total_check_p_time,
                 total_argmax_time,
-            ) = self.repair_as_you_go(start=start, num_cpus=num_cpus)
+            ) = self.iterative_repair(start=start, num_cpus=num_cpus)
             self.verify_allocation(overall_mapping_dict)
             num_bfps = [len(_bfps) for _bfps in bfp_list]
             return (
@@ -504,7 +504,7 @@ class QRAMRouter:
                 picked_bfps = unique_bfps
         return repair_dict, picked_bfps
 
-    def router_repair_global(
+    def flag_qubit_minimization(
         self, faulty_router_list, available_router_list, num_cpus=1
     ):
         faulty_router_list = np.array(faulty_router_list)
@@ -683,16 +683,16 @@ class MonteCarloRouterInstances:
             self.eps, rng, top_three_functioning=self.top_three_functioning
         )
         start_time = time.time()
-        _, num_flags_global, check_p_time_global, argmax_time_global = (
-            tree.router_repair(method="global", num_cpus=num_cpus)
+        _, num_flags_last_layer, check_p_time_last_layer, argmax_time_last_layer = (
+            tree.router_repair(method="last_layer", num_cpus=num_cpus)
         )
-        global_time = time.time()
-        _, num_flags_as_you_go, check_p_time_as_you_go, argmax_time_as_you_go = (
+        last_layer_time = time.time()
+        _, num_flags_iterative, check_p_time_iterative, argmax_time_iterative = (
             tree.router_repair(
-                method="as_you_go", start="simple_success", num_cpus=num_cpus
+                method="iterative", start="simple_success", num_cpus=num_cpus
             )
         )
-        as_you_go_time = time.time()
+        iterative_time = time.time()
         if run_brute_force:
             _, num_flags_brute_force, _, _ = tree.router_repair(method="brute_force")
         else:
@@ -702,23 +702,23 @@ class MonteCarloRouterInstances:
         num_avail_all = tree.count_available_addresses_all_levels()
         simple_success = []
         for n in range(3, self.n + 1):
-            _, n_success = tree.simple_reallocation(n)
+            _, n_success = tree.relabel_repair(n)
             simple_success.append(int(n_success))
         return np.concatenate(
             (
                 [
-                    num_flags_global,
-                    num_flags_as_you_go,
+                    num_flags_last_layer,
+                    num_flags_iterative,
                     num_flags_brute_force,
                     num_faulty,
                     num_avail_all,
-                    global_time - start_time,
-                    check_p_time_global,
-                    argmax_time_global,
-                    as_you_go_time - global_time,
-                    check_p_time_as_you_go,
-                    argmax_time_as_you_go,
-                    brute_force_time - as_you_go_time,
+                    last_layer_time - start_time,
+                    check_p_time_last_layer,
+                    argmax_time_last_layer,
+                    iterative_time - last_layer_time,
+                    check_p_time_iterative,
+                    argmax_time_iterative,
+                    brute_force_time - iterative_time,
                 ],
                 simple_success,
             )
@@ -738,31 +738,31 @@ class MonteCarloRouterInstances:
         result = unpack_param_map(
             param_map(run_fun, [idxs_and_streams], map_fun=map_fun)
         ).astype(float)
-        num_flags_global = result[..., 0]
-        num_flags_as_you_go = result[..., 1]
+        num_flags_last_layer = result[..., 0]
+        num_flags_iterative = result[..., 1]
         num_flags_brute_force = result[..., 2]
         num_faulty = result[..., 3]
         num_avail_all = result[..., 4]
-        global_time = result[..., 5]
-        check_p_time_global = result[..., 6]
-        argmax_time_global = result[..., 7]
-        as_you_go_time = result[..., 8]
-        check_p_time_as_you_go = result[..., 9]
-        argmax_time_as_you_go = result[..., 10]
+        last_layer_time = result[..., 5]
+        check_p_time_last_layer = result[..., 6]
+        argmax_time_last_layer = result[..., 7]
+        iterative_time = result[..., 8]
+        check_p_time_iterative = result[..., 9]
+        argmax_time_iterative = result[..., 10]
         brute_force_time = result[..., 11]
         n_n_success = result[..., 12:]
         data_dict = {
-            "num_flags_global": num_flags_global,
-            "num_flags_as_you_go": num_flags_as_you_go,
+            "num_flags_last_layer": num_flags_last_layer,
+            "num_flags_iterative": num_flags_iterative,
             "num_flags_brute_force": num_flags_brute_force,
             "num_faulty": num_faulty,
             "num_avail_all": num_avail_all,
-            "global_time": global_time,
-            "check_p_time_global": check_p_time_global,
-            "argmax_time_global": argmax_time_global,
-            "as_you_go_time": as_you_go_time,
-            "check_p_time_as_you_go": check_p_time_as_you_go,
-            "argmax_time_as_you_go": argmax_time_as_you_go,
+            "last_layer_time": last_layer_time,
+            "check_p_time_last_layer": check_p_time_last_layer,
+            "argmax_time_last_layer": argmax_time_last_layer,
+            "iterative_time": iterative_time,
+            "check_p_time_iterative": check_p_time_iterative,
+            "argmax_time_iterative": argmax_time_iterative,
             "brute_force_time": brute_force_time,
         }
         for idx, n in enumerate(range(3, self.n + 1)):
@@ -805,4 +805,3 @@ class AnalyticUnrepair:
 
 class SimpleReallocationFailure(Exception):
     """Raised when the simple reallocaion fails at runtime"""
-

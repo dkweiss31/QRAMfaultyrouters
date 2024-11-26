@@ -1,6 +1,6 @@
 # Faulty Towers: Recovering a functioning quantum random access memory in the presence of defective routers 
 
-Code repository for [[arXiv]](https://arxiv.org/abs/2411.XXXXX)
+Code repository for [[arXiv]](https://arxiv.org/abs/2411.15612)
 
 D. K. Weiss, Shifan Xu, Shruti Puri, Yongshan Ding, S. M. Girvin
 
